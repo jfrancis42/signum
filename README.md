@@ -259,7 +259,7 @@ time. This allowed for more test cycles in a given amount of wall
 clock time. Once two virtual instances of the modem proved to be 100%
 compatible, development moved on to the C++ code in this repository,
 with periodic checks against a physical modem. These checks mostly
-reveled timing issues that had to be addressed. The protocol is
+revealed timing issues that had to be addressed. The protocol is
 incredibly strict, often succeeding or failing in single-digit
 milliseconds of timing changes.
 

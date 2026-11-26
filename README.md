@@ -90,7 +90,7 @@ IC-7610, etc., as they share similar TX/RX characteristics.
 - **Optional encryption between two Signums, for non-amateur use
   only** (**illegal on the amateur bands**); built in only with
   `./configure --enable-encryption`, off until turned on, first use
-  needs the `NOT-AMATEUR` acknowledgement): pre-shared keys or station
+  needs the `NOT-AMATEUR` acknowledgement: pre-shared keys or station
   key pairs (Noise IK/XX, AES-256-GCM, fresh keys every link for
   forward secrecy), checked by fingerprint or by an 8-digit SAS
   compared by voice; zstd compression with an English dictionary

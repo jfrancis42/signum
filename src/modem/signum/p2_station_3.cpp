@@ -411,7 +411,7 @@ void P2Station::premod_after_bk()
 		std::vector<uint8_t> d; uint8_t st = 0;
 		PremodKey k;
 		if (!predict_new(d, st) || !premod_key(tx_words(d, st, (counter_ + 1) & 3, true), k)) continue;
-		premod_.push_back(Premod{k, pool_.submit([k, fs, lo, hi]() { return premod_make(k, fs, lo, hi); }).share()});
+		premod_.push_back(Premod{k, pool_.submit([k, fs, lo, hi]() { return premod_make(k, fs, lo, hi); }).share(), {}, {}});
 	}
 	p3_level_ = lv0; counter_ = ctr0; p3_long_ = lng0; p3_first_tx_ = first0; qrt_end_sent_ = qe0;
 }

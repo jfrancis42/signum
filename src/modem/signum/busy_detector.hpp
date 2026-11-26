@@ -6,13 +6,16 @@
 //    10 ms (one 100 Bd symbol), every 2.5 ms. The product of a sum with the conjugate of the one
 //    10 ms earlier, raised to the 4th power, has the same phase for a steady tone and for DBPSK or
 //    DQPSK keying (steps of 0, 90, 180 or 270 degrees) and a random one for noise. Its magnitude-
-//    weighted average over ~0.25 s against the average magnitude (the coherence, 0..1) is ~0.1-0.3
-//    on noise and near 1 on a clean P2 control signal, P1 set-up idle or a tuning carrier: busy
-//    above kCoherence. A product's weight is capped at kWeightCap times the average, so a static
-//    crash does not take the average over.
+//    weighted sum over the last kBoxS against the sum of the magnitudes (the coherence, 0..1) is
+//    ~0.1-0.3 on noise and near 1 on a clean P2 control signal, P1 set-up idle or a tuning carrier:
+//    busy above kCoherence. A product's weight is capped at kWeightCap times the mean, so a static
+//    crash does not take the sum over.
 // 2. Power concentrated on our tones (P1 FSK, P2): 2 x (power in the two 10 ms tone sums) against
-//    the power in 300-2700 Hz, averaged over ~0.25 s, is 1 for a signal on the tones alone and
-//    about 0.1 on band noise: busy above kToneShare.
+//    the power in 300-2700 Hz, summed over the last kBoxS, is 1 for a signal on the tones alone
+//    and about 0.1 on band noise: busy above kToneShare.
+//    Both are sums over a fixed window, not running averages: a signal is forgotten once it has
+//    left the window, however strong it was (a running average forgets a strong signal only when
+//    what is left of it sinks under the noise, seconds later).
 // 3. Any signal well above the band noise (P3, other modes, voice): the median 10 ms power in
 //    300-2700 Hz over the last 0.25 s against the floor, the lower quartile of the 0.5 s means of
 //    the last 60 s: busy kAboveFloorDb or more above it. The median ignores static crashes, the
@@ -85,7 +88,8 @@ public:
 
 private:
 	static constexpr int kWin = 4;                   // sub-blocks of 2.5 ms in a 10 ms sum
-	static constexpr double kAlpha = 1.0 / 100;      // ~0.25 s at 400 updates/s
+	static constexpr int kBox = 200;                 // kBoxS of 2.5 ms hops: the window of tests 1 and 2
+	static constexpr double kBoxS = kBox * 0.0025;
 	static constexpr int kMedBlocks = 25;            // 0.25 s of 10 ms powers
 	static constexpr int kFloorBlocks = 50;          // 0.5 s per floor reading
 	static constexpr int kFloorReadings = 120;       // 60 s of readings
@@ -109,20 +113,26 @@ private:
 			const std::complex<double> d = z * std::conj(lag_[size_t(t)][size_t(li_)]);
 			lag_[size_t(t)][size_t(li_)] = z;
 			const double m = std::abs(d);
-			if (m > 0) {
-				const double w = cw_[t] > 0 ? std::min(m, kWeightCap * cw_[t]) : m;
-				const std::complex<double> u = d * d * d * d / (m * m * m * m) * w;
-				cu_[t] += kAlpha * (u - cu_[t]);
-				cw_[t] += kAlpha * (w - cw_[t]);
-			} else {
-				cu_[t] *= 1 - kAlpha; cw_[t] *= 1 - kAlpha;
-			}
-			coh_[t] = cw_[t] > 0 ? std::abs(cu_[t]) / cw_[t] : 0;
+			const double w = bn_ > 0 && sw_[t] > 0 ? std::min(m, kWeightCap * sw_[t] / bn_) : m;
+			const std::complex<double> u = m > 0 ? d * d * d * d / (m * m * m * m) * w : 0.0;
+			su_[t] += u - bu_[size_t(t)][size_t(bi_)]; bu_[size_t(t)][size_t(bi_)] = u;
+			sw_[t] += w - bw_[size_t(t)][size_t(bi_)]; bw_[size_t(t)][size_t(bi_)] = w;
 		}
 		li_ = (li_ + 1) % kWin;
-		pt_avg_ += kAlpha * (2 * pt - pt_avg_);
-		pb_avg_ += kAlpha * (pb - pb_avg_);
-		share_ = pb_avg_ > 0 ? pt_avg_ / pb_avg_ : 0;
+		spt_ += 2 * pt - bpt_[size_t(bi_)]; bpt_[size_t(bi_)] = 2 * pt;
+		spb_ += pb - bpb_[size_t(bi_)]; bpb_[size_t(bi_)] = pb;
+		bi_ = (bi_ + 1) % kBox;
+		if (bn_ < kBox) bn_++;
+		if (bi_ == 0) {                              // once per window: the sums afresh (no drift)
+			for (int t = 0; t < 2; t++) {
+				su_[t] = 0; sw_[t] = 0;
+				for (int k = 0; k < kBox; k++) { su_[t] += bu_[size_t(t)][size_t(k)]; sw_[t] += bw_[size_t(t)][size_t(k)]; }
+			}
+			spt_ = spb_ = 0;
+			for (int k = 0; k < kBox; k++) { spt_ += bpt_[size_t(k)]; spb_ += bpb_[size_t(k)]; }
+		}
+		for (int t = 0; t < 2; t++) coh_[t] = sw_[t] > 0 ? std::abs(su_[t]) / sw_[t] : 0;
+		share_ = spb_ > 0 ? spt_ / spb_ : 0;
 		blk_p_ += pb;
 	}
 
@@ -153,7 +163,8 @@ private:
 			if (m >= kMinRms * kMinRms) { above_db_ = 10 * std::log10(m / fl); loud = above_db_ >= kAboveFloorDb; }
 		}
 		const bool heard = p >= kMinRms * kMinRms;   // this 10 ms, not the 0.25 s average: silence after a signal detects nothing
-		detect_ = (heard && (coh_[0] > kCoherence || coh_[1] > kCoherence || share_ > kToneShare)) || loud;
+		const bool full = bn_ == kBox;                // tests 1 and 2 once their window is full (inside the start-up hang)
+		detect_ = (heard && full && (coh_[0] > kCoherence || coh_[1] > kCoherence || share_ > kToneShare)) || loud;
 		const double dt = 0.01;
 		step(detect_, dt, hang_lamp_, busy_lamp_);
 		if (status) step(detect_, dt, hang_status_, busy_status_);
@@ -194,9 +205,13 @@ private:
 	std::array<std::array<std::complex<double>, kWin>, 2> sub_z_{}, lag_{};
 	std::array<double, kWin> sub_p_{};
 	int si_ = 0, li_ = 0;
-	std::complex<double> cu_[2] = {0, 0};
-	double cw_[2] = {0, 0}, coh_[2] = {0, 0};
-	double pt_avg_ = 0, pb_avg_ = 0, share_ = 0, blk_p_ = 0;
+	std::array<std::array<std::complex<double>, kBox>, 2> bu_{};
+	std::array<std::array<double, kBox>, 2> bw_{};
+	std::array<double, kBox> bpt_{}, bpb_{};
+	int bi_ = 0, bn_ = 0;
+	std::complex<double> su_[2] = {0, 0};
+	double sw_[2] = {0, 0}, coh_[2] = {0, 0};
+	double spt_ = 0, spb_ = 0, share_ = 0, blk_p_ = 0;
 	std::array<double, kMedBlocks> med_{};
 	int mi_ = 0, med_n_ = 0;
 	std::array<double, kFloorReadings> floor_r_{};

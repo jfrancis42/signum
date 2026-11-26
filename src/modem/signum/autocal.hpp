@@ -72,11 +72,12 @@ struct AutoCal {
 	bool hw_estimate(double &out) const
 	{
 		float s[kRing];
-		std::copy(hw_, hw_ + nhw_, s);
-		std::sort(s, s + nhw_);
-		for (int i = 0; i + kConfirm <= nhw_; i++) {
+		const int n = std::min(nhw_, kRing);
+		std::copy(hw_, hw_ + n, s);
+		std::sort(s, s + n);
+		for (int i = 0; i + kConfirm <= n; i++) {
 			int j = i;
-			while (j + 1 < nhw_ && s[j + 1] - s[i] <= kCluster) j++;
+			while (j + 1 < n && s[j + 1] - s[i] <= kCluster) j++;
 			if (j - i + 1 >= kConfirm) { out = 0.5 * (double(s[i + (j - i) / 2]) + double(s[i + (j - i + 1) / 2])); return true; }
 		}
 		return false;

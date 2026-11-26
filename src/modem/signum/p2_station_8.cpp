@@ -472,7 +472,10 @@ void P2Station::on_unproto(int64_t ref)
 	const double cycle = up_p1_ ? 1.0125 : up_long_ ? 3.3875 : 0.8875;
 	auto burst = up_p1_ ? up_p1_burst() : p2::modulate(up_words_, float(cfg_.fs), cfg_.tone_lo, cfg_.tone_hi, (up_slot_ % 2) == 1, p2_amp());   // P2: with its 20 ms lead, as p2_unproto
 	if (up_p1_) up_inv_ = !up_inv_;                  // the next copy inverted
-	tx_.push_back(TxBurst{ref, std::move(burst), {}});
+	TxBurst tb;
+	tb.start = ref;
+	tb.audio = std::move(burst);
+	tx_.push_back(std::move(tb));
 	up_slot_++;
 	up_rep_ = (up_rep_ + 1) % up_reps_;
 	schedule(ref + samples(cycle), EV_UNPROTO, ref + samples(cycle));

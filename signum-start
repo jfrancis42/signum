@@ -1,0 +1,67 @@
+#!/bin/bash
+# signum-start: start the TNC (build/signum) and its terminal front
+# panel (tui/signum-tui) together, and print the GUI's URL.
+#
+#   signum-start [--no-tui] [--bin PATH] [signum options...]
+#
+# Every option not listed here goes to signum (its --help lists them;
+# --ws ADDR:PORT moves the GUI and WebSocket, --ws-auth USER:PASS adds a
+# login, which the TUI is given too). The TNC's own output goes to a log
+# file while the TUI has the terminal: $XDG_STATE_HOME/signum/tnc.log
+# (default ~/.local/state/signum/tnc.log). Quitting the TUI (/q or
+# Ctrl-C) stops the TNC. With --no-tui the TNC runs in the foreground with
+# its output on the terminal.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jeff Francis, N0GQ
+set -u
+here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+datadir=@DATADIR@   # filled in by make install
+bin=$here/build/signum
+[ -x "$bin" ] || bin=$here/signum
+[ -x "$bin" ] || bin=$(command -v signum || echo "$here/build/signum")
+tui=1
+args=()
+ws=127.0.0.1:8770
+auth=
+while [ $# -gt 0 ]; do
+	case $1 in
+		--no-tui) tui=0 ;;
+		--bin) bin=$2; shift ;;
+		--ws) ws=$2; args+=("$1" "$2"); shift ;;
+		--ws-auth) auth=$2; args+=("$1" "$2"); shift ;;
+		-h|--help) sed -n '2,13p' "$0"; exit 0 ;;
+		*) args+=("$1") ;;
+	esac
+	shift
+done
+[ -x "$bin" ] || { echo "signum-start: $bin not built (make)"; exit 1; }
+case $ws in *:*) host=${ws%:*}; port=${ws##*:} ;; *) host=127.0.0.1; port=$ws ;; esac
+[ "$host" = 0.0.0.0 ] && host=127.0.0.1
+gui="http://$host:$port/"
+if [ $tui = 0 ]; then
+	echo "signum: GUI $gui   (WebSocket ws://$host:$port/, command shell ws://$host:$port/shell)"
+	exec "$bin" "${args[@]}"
+fi
+logdir=${XDG_STATE_HOME:-$HOME/.local/state}/signum
+mkdir -p "$logdir"
+log=$logdir/tnc.log
+"$bin" "${args[@]}" >"$log" 2>&1 &
+pid=$!
+stop() { kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; }
+trap stop EXIT
+# wait for the server (its "[ws] GUI" line), or the TNC to fail
+for _ in $(seq 100); do
+	grep -q '^\[ws\] GUI' "$log" 2>/dev/null && break
+	kill -0 "$pid" 2>/dev/null || { echo "signum did not start:"; tail -n 20 "$log"; exit 1; }
+	sleep 0.1
+done
+echo "signum: GUI $gui   (log: $log)"
+sleep 1
+tuiargs=("ws://$host:$port/")
+[ -n "$auth" ] && tuiargs+=(--auth "$auth")
+tuibin=$here/tui/signum-tui
+[ -x "$tuibin" ] || tuibin=$datadir/tui/signum-tui
+[ -x "$tuibin" ] || tuibin=$here/../share/signum/tui/signum-tui
+"$tuibin" "${tuiargs[@]}"
+echo "signum: stopping (GUI was $gui; log: $log)"

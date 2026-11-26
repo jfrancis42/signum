@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jeff Francis, N0GQ
+# Example only: not installed into systemd, not enabled. It lets the user Signum runs as
+# hold the CPU clock up while a link is up (--cpu-clock auto, the default; docs/md/performance.md "CPU clock"):
+# at boot it makes every cpufreq policy's scaling_min_freq writable for that user's group.
+# Copy to /etc/systemd/system/signum-cpufreq.service, put the group in (here: signum), then
+#   systemctl daemon-reload && systemctl enable --now signum-cpufreq
+# Signum writes only scaling_min_freq (= scaling_max_freq while linked, the value it found
+# otherwise and on exit); nothing else changes.
+[Unit]
+Description=Let Signum hold the CPU clock up while a link is up
+After=systemd-modules-load.service
+Before=signum.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# ($$: systemd itself expands $NAME in Exec lines)
+ExecStart=/bin/sh -c 'for f in /sys/devices/system/cpu/cpufreq/policy*/scaling_min_freq; do [ -e "$$f" ] && chgrp signum "$$f" && chmod g+w "$$f"; done; true'
+
+[Install]
+WantedBy=multi-user.target

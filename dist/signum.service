@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jeff Francis, N0GQ
+# Example only: not installed into systemd, not enabled. Copy to
+# /etc/systemd/system/signum.service, adjust, then
+#   systemctl daemon-reload && systemctl enable --now signum
+# Real-time scheduling needs: setcap cap_sys_nice,cap_ipc_lock+ep /usr/local/bin/signum (make install sets it)
+[Unit]
+Description=Signum P1/P2/P3 HF data modem
+After=sound.target network.target
+
+[Service]
+User=signum
+SupplementaryGroups=audio dialout
+ExecStart=/usr/local/bin/signum --call N0CALL --alsa plughw:CARD=CODEC --ptt none --ws 127.0.0.1:8770 --quiet
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

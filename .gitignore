@@ -1,0 +1,5 @@
+# build output and ./configure result
+/build/
+config.mk
+__pycache__/
+*.pyc

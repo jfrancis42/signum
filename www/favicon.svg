@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- One lit green lamp of the front panel (www/index.html, .led.green): the same colours,
+       body gradient (#3dff74 to 55% / 25% black), specular highlight, edge vignette, dark
+       bezel ring and green glow. -->
+  <defs>
+    <radialGradient id="glow" cx="32" cy="32" r="32" gradientUnits="userSpaceOnUse">
+      <stop offset="0.74" stop-color="#3dff74" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#3dff74" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="body" cx="0.5" cy="0.6" r="0.781" fx="0.5" fy="0.6">
+      <stop offset="0" stop-color="#3dff74"/>
+      <stop offset="0.7" stop-color="#228c40"/>
+      <stop offset="1" stop-color="#0f401d"/>
+    </radialGradient>
+    <radialGradient id="vig" cx="0.5" cy="0.5" r="0.707">
+      <stop offset="0.55" stop-color="#000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000" stop-opacity="0.35"/>
+    </radialGradient>
+    <radialGradient id="hi" cx="0.5" cy="0.4" r="0.707">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.85"/>
+      <stop offset="0.45" stop-color="#fff" stop-opacity="0.25"/>
+      <stop offset="0.75" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <circle cx="32" cy="32" r="32" fill="url(#glow)"/>
+  <circle cx="32" cy="32" r="27" fill="#0b0d0f"/>
+  <circle cx="32" cy="32" r="27" fill="none" stroke="#fff" stroke-opacity="0.08" stroke-width="1"/>
+  <circle cx="32" cy="32" r="23" fill="url(#body)"/>
+  <circle cx="32" cy="32" r="23" fill="url(#vig)"/>
+  <ellipse cx="28.8" cy="21.4" rx="10.1" ry="7.8" fill="url(#hi)"/>
+</svg>

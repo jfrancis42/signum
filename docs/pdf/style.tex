@@ -1,0 +1,85 @@
+% SPDX-License-Identifier: GPL-3.0-or-later
+% Copyright (C) 2026 Jeff Francis, N0GQ
+% style.tex: the look of Signum's PDF documents (docs/pdf/README.md). Included by build-pdf.sh after
+% pandoc's own preamble; \doctitle, \docsubtitle, \docversion and \docdate come from the build.
+\usepackage[a4paper,top=28mm,bottom=28mm,left=25mm,right=25mm,headheight=14pt]{geometry}
+\usepackage[table]{xcolor}
+% fonts by file name (found in the TeX tree and the system's font directories on every distribution,
+% with no font-name cache to refresh): TeX Gyre Pagella and Heros, DejaVu Sans Mono
+\setmainfont{texgyrepagella}[Extension=.otf,UprightFont=*-regular,BoldFont=*-bold,ItalicFont=*-italic,BoldItalicFont=*-bolditalic]
+\setsansfont{texgyreheros}[Extension=.otf,UprightFont=*-regular,BoldFont=*-bold,ItalicFont=*-italic,BoldItalicFont=*-bolditalic]
+\setmonofont{DejaVuSansMono}[Extension=.ttf,UprightFont=*,BoldFont=*-Bold,ItalicFont=*-Oblique,BoldItalicFont=*-BoldOblique,Scale=0.86]
+\definecolor{signum}{HTML}{8A3B12}
+\definecolor{signumdark}{HTML}{3A2418}
+\definecolor{codebg}{HTML}{F6F3EF}
+\definecolor{coderule}{HTML}{D9CFC4}
+\definecolor{rowtint}{HTML}{FAF7F3}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{lastpage}
+\usepackage{etoolbox}
+\usepackage[most]{tcolorbox}
+\usepackage{listings}
+\usepackage{microtype}
+\usepackage{tikz}
+
+% headings: sans, the Signum colour, numbered
+\titleformat{\section}{\sffamily\Large\bfseries\color{signum}}{\thesection}{0.8em}{}[{\color{coderule}\titlerule[0.6pt]}]
+\titleformat{\subsection}{\sffamily\large\bfseries\color{signumdark}}{\thesubsection}{0.8em}{}
+\titleformat{\subsubsection}{\sffamily\normalsize\bfseries\color{signumdark}}{\thesubsubsection}{0.8em}{}
+\titlespacing*{\section}{0pt}{2.2ex plus 1ex}{1.2ex}
+\setlength{\parskip}{0.55ex plus 0.2ex}
+\setlength{\parindent}{0pt}
+
+% headers and footers: the title and the section; the version and the page of pages
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\sffamily\small\color{signumdark}\doctitle}
+\fancyhead[R]{\sffamily\small\color{signumdark}\nouppercase{\leftmark}}
+\fancyfoot[L]{\sffamily\small\color{signumdark}Version \docversion}
+\fancyfoot[R]{\sffamily\small\color{signumdark}Page \thepage\ of \pageref*{LastPage}}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0.4pt}
+\fancypagestyle{plain}{\fancyhf{}\fancyfoot[L]{\sffamily\small\color{signumdark}Version \docversion}%
+  \fancyfoot[R]{\sffamily\small\color{signumdark}Page \thepage\ of \pageref*{LastPage}}\renewcommand{\headrulewidth}{0pt}}
+\renewcommand{\sectionmark}[1]{\markboth{\thesection\quad #1}{}}
+
+% the title page
+\makeatletter
+\renewcommand{\maketitle}{%
+  \thispagestyle{empty}%
+  \begin{tikzpicture}[remember picture,overlay]
+    \fill[signumdark] (current page.north west) rectangle ([yshift=-100mm]current page.north east);
+    \fill[signum] ([yshift=-100mm]current page.north west) rectangle ([yshift=-104mm]current page.north east);
+    \node[anchor=south west,text width=150mm,align=left,inner sep=0pt] at ([xshift=25mm,yshift=-62mm]current page.north west)
+      {\color{white}\sffamily\fontsize{30}{36}\selectfont\bfseries \doctitle};
+    \node[anchor=north west,text width=150mm,align=left,inner sep=0pt] at ([xshift=25mm,yshift=-70mm]current page.north west)
+      {\color{white!80!signum}\sffamily\Large \docsubtitle};
+    \node[anchor=north west,align=left,inner sep=0pt] at ([xshift=25mm,yshift=-125mm]current page.north west)
+      {\sffamily\large\color{signumdark} Version \docversion};
+    \node[anchor=north west,align=left,inner sep=0pt] at ([xshift=25mm,yshift=-133mm]current page.north west)
+      {\sffamily\color{signumdark} \docdate};
+    \node[anchor=south west,text width=160mm,align=left,inner sep=0pt] at ([xshift=25mm,yshift=20mm]current page.south west)
+      {\sffamily\small\color{signumdark} Copyright \textcopyright\ 2026 Jeff Francis, N0GQ.
+       Licensed under the GNU General Public License, version 3 or later (GPL-3.0-or-later).};
+  \end{tikzpicture}%
+  \null\clearpage}
+\makeatother
+\pretocmd{\tableofcontents}{\begingroup\sffamily}{}{}
+\apptocmd{\tableofcontents}{\endgroup\clearpage}{}{}
+
+% code: a tinted box, listings inside (lines broken where needed)
+\lstdefinestyle{signum}{basicstyle=\ttfamily\small,columns=fullflexible,keepspaces=true,breaklines=true,
+  breakatwhitespace=false,showstringspaces=false,upquote=true,
+  keywordstyle=\color{signum}\bfseries,commentstyle=\color{black!55}\itshape,stringstyle=\color{signumdark!80!green!60!black},
+  literate={→}{{$\rightarrow$}}1 {°}{{$^\circ$}}1 {—}{{---}}1 {–}{{--}}1}
+\newtcblisting{fcode}[1][]{listing only,breakable,enhanced,colback=codebg,colframe=coderule,boxrule=0.5pt,arc=1.5mm,
+  left=2mm,right=2mm,top=1mm,bottom=1mm,before skip=1ex,after skip=1.2ex,listing options={style=signum,#1}}
+\renewcommand{\texttt}[1]{\leavevmode{\ttfamily\color{signumdark}#1}}
+
+% tables: light rules, tinted rows, small sans header
+\AtBeginEnvironment{longtable}{\small\rowcolors{2}{rowtint}{white}}
+\setlength{\LTpre}{1ex}\setlength{\LTpost}{1.5ex}
+\renewcommand{\arraystretch}{1.25}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=signum,urlcolor=signum}

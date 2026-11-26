@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jeff Francis, N0GQ
+# Example only: not enabled. Pat's web interface through Signum's host-mode port (Pat's config: "pactor" path
+# /tmp/ttysignum0; "http_addr" 0.0.0.0:8080 to reach it from the LAN). docs/md/running.md "Signum, rigctld and Pat as services".
+[Unit]
+Description=Pat Winlink client through Signum
+After=signum.service network-online.target
+Wants=signum.service network-online.target
+
+[Service]
+User=CHANGE-ME
+ExecStart=/usr/bin/pat --config /home/CHANGE-ME/.config/pat/config.json http
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

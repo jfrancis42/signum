@@ -1,0 +1,141 @@
+#!/bin/bash
+# signum-loopback: two Signum stations on one computer, joined by the ALSA
+# loopback driver (snd-aloop) as if by two radios: what one plays, the other
+# hears. For trying Signum out, the GUI, the terminal and host software
+# without a radio. Nothing is keyed (--ptt none).
+#
+#   signum-loopback [start] [--bin PATH] [--calls A B] [-- signum options...]
+#   signum-loopback stop       stop both stations (and try to unload snd-aloop if this script loaded it)
+#   signum-loopback status     what is running, with the URLs
+#   signum-loopback reset      delete both stations' settings and keys (stations stopped first)
+#
+# Station A: GUI http://127.0.0.1:8771/, telnet 127.0.0.1:3001, pty /tmp/ttysignumA
+# Station B: GUI http://127.0.0.1:8772/, telnet 127.0.0.1:3002, pty /tmp/ttysignumB
+# Calls default to TESTA and TESTB. In A's terminal: C TESTB, then type.
+# Logs: $XDG_STATE_HOME/signum/loopback-A.log and -B.log (default ~/.local/state/signum).
+# Options after -- go to both stations (signum --help lists them).
+#
+# Each station keeps its own files in $XDG_STATE_HOME/signum/loopback/A and .../B: its settings
+# file (signum.conf, written by the Configure tab) and its encryption keys (keys/). Two stations
+# must never share a key directory: they would have one station key between them and overwrite
+# each other's list of known stations. Your own ~/.config/signum is not touched.
+#
+# Loading snd-aloop needs root once (sudo modprobe snd-aloop); the script asks
+# sudo for it. The loopback card pairs device 0 and device 1 of the same
+# subdevice: A uses plughw:CARD=Loopback,DEV=0,SUBDEV=0, B DEV=1.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jeff Francis, N0GQ
+set -u
+here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+datadir=@DATADIR@   # filled in by make install
+bin=$here/build/signum
+[ -x "$bin" ] || bin=$here/signum
+[ -x "$bin" ] || bin=$(command -v signum || echo "$here/build/signum")
+callA=TESTA callB=TESTB
+cmd=start
+extra=()
+run=${XDG_RUNTIME_DIR:-/tmp}/signum-loopback-$(id -u)
+logdir=${XDG_STATE_HOME:-$HOME/.local/state}/signum
+statedir=$logdir/loopback   # per station: A/signum.conf, A/keys, B/...
+case ${1:-} in start|stop|status|reset) cmd=$1; shift ;; esac
+while [ $# -gt 0 ]; do
+	case $1 in
+		--bin) bin=$2; shift ;;
+		--calls) callA=$2; callB=$3; shift 2 ;;
+		--) shift; extra=("$@"); break ;;
+		-h|--help) sed -n '2,26p' "$0"; exit 0 ;;
+		*) echo "signum-loopback: unknown option $1 (--help)"; exit 2 ;;
+	esac
+	shift
+done
+
+alive() { [ -f "$run/$1.pid" ] && kill -0 "$(cat "$run/$1.pid")" 2> /dev/null; }
+
+status() {
+	local s any=0
+	for s in A B; do
+		if alive $s; then
+			any=1
+			echo "station $s: running (pid $(cat "$run/$s.pid")), $(cat "$run/$s.info")"
+		else
+			echo "station $s: not running"
+		fi
+	done
+	grep -q '\[Loopback' /proc/asound/cards 2> /dev/null && echo "snd-aloop: loaded" || echo "snd-aloop: not loaded"
+	[ $any = 1 ]
+}
+
+stop() {
+	local s p
+	for s in A B; do
+		if alive $s; then
+			p=$(cat "$run/$s.pid")
+			kill "$p"
+			for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$p" 2> /dev/null || break; sleep 0.3; done
+			kill -0 "$p" 2> /dev/null && kill -9 "$p"
+			echo "station $s stopped"
+		fi
+		rm -f "$run/$s.pid" "$run/$s.info"
+	done
+	if [ -f "$run/loaded-aloop" ]; then
+		if sudo modprobe -r snd-aloop 2> /dev/null; then echo "snd-aloop unloaded"
+		else echo "snd-aloop left loaded (the sound server holds the card; harmless, gone at reboot)"; fi
+		rm -f "$run/loaded-aloop"
+	fi
+}
+
+start() {
+	[ -x "$bin" ] || { echo "signum-loopback: $bin not built (make)"; exit 1; }
+	if alive A || alive B; then echo "signum-loopback: already running (signum-loopback stop first)"; status; exit 1; fi
+	mkdir -p "$run" "$logdir"
+	if ! grep -q '^ *[0-9]* \[Loopback' /proc/asound/cards 2> /dev/null; then
+		echo "loading snd-aloop (sudo modprobe snd-aloop)"
+		sudo modprobe snd-aloop || { echo "signum-loopback: could not load snd-aloop"; exit 1; }
+		touch "$run/loaded-aloop"
+		for _ in 1 2 3 4 5 6 7 8 9 10; do grep -q '\[Loopback' /proc/asound/cards && break; sleep 0.3; done
+	fi
+	local s call dev ws tn pty port busy sd
+	for port in 8771 8772 3001 3002; do
+		busy=$( (ss -ltn 2> /dev/null || true) | awk -v p=":$port" '$4 ~ p"$"' )
+		[ -z "$busy" ] || { echo "signum-loopback: port $port is in use"; exit 1; }
+	done
+	for s in A B; do
+		if [ $s = A ]; then call=$callA dev=0 ws=8771 tn=3001; else call=$callB dev=1 ws=8772 tn=3002; fi
+		pty=/tmp/ttysignum$s
+		sd=$statedir/$s
+		mkdir -p "$sd/keys" && chmod 700 "$sd" "$sd/keys"
+		nohup setsid "$bin" --config "$sd/signum.conf" --key-dir "$sd/keys" \
+			--call "$call" --alsa "plughw:CARD=Loopback,DEV=$dev,SUBDEV=0" --ptt none --no-autocal \
+			--ws "127.0.0.1:$ws" --telnet "$tn" --pty "$pty" "${extra[@]}" \
+			> "$logdir/loopback-$s.log" 2>&1 < /dev/null &
+		echo $! > "$run/$s.pid"
+		echo "$call, GUI http://127.0.0.1:$ws/, telnet 127.0.0.1:$tn, pty $pty, log $logdir/loopback-$s.log, files $sd" > "$run/$s.info"
+	done
+	sleep 2
+	for s in A B; do
+		alive $s || { echo "signum-loopback: station $s did not start:"; tail -n 5 "$logdir/loopback-$s.log"; stop; exit 1; }
+	done
+	status
+	# Real-time priority: not needed on the loopback (no radio's turnaround to meet; a stall of the
+	# audio loop keeps the link's timing), but say when the stations run without it.
+	for s in A B; do
+		if grep -q 'no real-time priority' "$logdir/loopback-$s.log" 2> /dev/null; then
+			echo "station $s: no real-time priority (fine on the loopback; for a radio give the binary cap_sys_nice,cap_ipc_lock (make does) on a filesystem mounted without nosuid, or an rtprio limit)"
+		fi
+	done
+	echo "In A's terminal: C $callB, then type. Stop with: signum-loopback stop"
+}
+
+reset() {
+	if alive A || alive B; then echo "signum-loopback: stop the stations first (signum-loopback stop)"; exit 1; fi
+	rm -rf "$statedir/A" "$statedir/B"
+	echo "deleted both stations' settings and keys ($statedir)"
+}
+
+case $cmd in
+	start) start ;;
+	reset) reset ;;
+	stop) stop ;;
+	status) status ;;
+esac

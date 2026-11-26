@@ -1,0 +1,728 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jeff Francis, N0GQ
+"""signum-tui: the TNC's front panel and link in a terminal (curses),
+over the TNC's WebSocket, with a command line.
+
+  signum-tui [ws://HOST:PORT/]   default ws://127.0.0.1:8770/
+  signum-tui --auth USER:PASS    the TNC's --ws-auth login (or ?auth=BASE64 on the URL)
+  signum-tui --once [URL]        print one frame as plain text and exit (no curses)
+
+The panel is the GUI's front panel in character cells (docs/md/gui.md "The front panel"):
+the two-line display, the readouts (link time, characters in and out,
+characters a minute in and out, bytes still to send, link quality, frequency
+offset), the received S/N (dB in 3 kHz), the receive audio lamps (Low, OK,
+High/Clip), the radio's frequency (kHz, from the PTT's rig control), the far
+end's last answer (OK, Repeat, Faster, Slower, Long/short),
+the lamps at fixed places (Free/Busy, Connect/Call, Send/Chg-over,
+Traffic/Error, TX; P1 100 200 | P2 1 2 3 4 | P3 1 2 3 4 5 6), the 15-LED
+tuning row (the TNC's tune_led, 5 Hz per LED, red past 10 Hz), the
+Disconnect button with its lamp, and the Peer lamps (Signum: the other station
+is a Signum; Other: no Signum marker in its first 64 characters).
+
+Keys: type a terminal command and Enter (MYcall, MYLevel 2, C N0CALL, D ...);
+a line starting with ">" is sent as link text; /c CALL connect; Ctrl-D the
+Disconnect button (D; pressed again while the disconnect is in progress, DD);
+/d disconnect, /dd abort, /q (or Ctrl-C) quit. PgUp/PgDn scroll the text.
+With encryption built in (./configure --enable-encryption), a CRYPTO lamp line (Armed, Key/Fail,
+Secure, Verified, as the GUI's Crypto lamps) and an ENCRYPTION line show its state; the console's
+CRYPTO commands work on the command line (docs/md/encryption.md).
+
+Python 3 standard library only.
+"""
+import base64
+import json
+import os
+import queue
+import socket
+import ssl
+import struct
+import sys
+import threading
+import time
+import urllib.parse
+
+DEFAULT_URL = "ws://127.0.0.1:8770/"
+
+
+# ---- a small WebSocket client (RFC 6455), standard library only ------------------
+class WsError(Exception):
+    pass
+
+
+class Ws:
+    def __init__(self, url, auth=None, timeout=5):
+        u = urllib.parse.urlsplit(url)
+        if u.scheme not in ("ws", "wss"):
+            raise WsError(f"not a ws:// URL: {url}")
+        port = u.port or (443 if u.scheme == "wss" else 80)
+        s = socket.create_connection((u.hostname, port), timeout=timeout)
+        if u.scheme == "wss":
+            s = ssl.create_default_context().wrap_socket(s, server_hostname=u.hostname)
+        key = base64.b64encode(os.urandom(16)).decode()
+        path = (u.path or "/") + ("?" + u.query if u.query else "")
+        hdr = [f"GET {path} HTTP/1.1", f"Host: {u.hostname}:{port}", "Upgrade: websocket", "Connection: Upgrade",
+               f"Sec-WebSocket-Key: {key}", "Sec-WebSocket-Version: 13"]
+        if auth:
+            hdr.append("Authorization: Basic " + base64.b64encode(auth.encode()).decode())
+        s.sendall(("\r\n".join(hdr) + "\r\n\r\n").encode())
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            d = s.recv(4096)
+            if not d:
+                raise WsError("closed during the handshake")
+            buf += d
+        head, self.buf = buf.split(b"\r\n\r\n", 1)
+        self.taken = b""
+        if b" 101 " not in head.split(b"\r\n")[0]:
+            raise WsError(head.split(b"\r\n")[0].decode(errors="replace"))
+        self.s = s
+        self.lock = threading.Lock()
+
+    def settimeout(self, t):
+        self.s.settimeout(t)
+
+    def _send(self, op, data):
+        n = len(data)
+        h = bytes([0x80 | op])
+        if n < 126:
+            h += bytes([0x80 | n])
+        elif n < 65536:
+            h += bytes([0x80 | 126]) + struct.pack(">H", n)
+        else:
+            h += bytes([0x80 | 127]) + struct.pack(">Q", n)
+        mask = os.urandom(4)
+        body = bytes(b ^ mask[i & 3] for i, b in enumerate(data))
+        with self.lock:
+            self.s.sendall(h + mask + body)
+
+    def send_text(self, text):
+        self._send(0x1, text.encode())
+
+    def send_binary(self, data):
+        self._send(0x2, bytes(data))
+
+    def _need(self, n):
+        while len(self.buf) < n:
+            d = self.s.recv(65536)
+            if not d:
+                raise WsError("connection closed")
+            self.buf += d
+        out, self.buf = self.buf[:n], self.buf[n:]
+        self.taken += out
+        return out
+
+    def recv(self):
+        """The next message: (opcode, bytes); opcode 1 text, 2 binary. Raises WsError on close. A socket timeout in the
+        middle of a frame gives back what was taken of it (the next call starts at the frame again, not in its payload)."""
+        self.taken = b""
+        try:
+            return self._recv()
+        except socket.timeout:
+            self.buf = self.taken + self.buf
+            raise
+
+    def _recv(self):
+        msg, mop = b"", None
+        while True:
+            b0, b1 = self._need(2)
+            op, n = b0 & 0x0F, b1 & 0x7F
+            if n == 126:
+                n = struct.unpack(">H", self._need(2))[0]
+            elif n == 127:
+                n = struct.unpack(">Q", self._need(8))[0]
+            mask = self._need(4) if b1 & 0x80 else None
+            data = self._need(n)
+            if mask:
+                data = bytes(b ^ mask[i & 3] for i, b in enumerate(data))
+            if op == 0x8:
+                raise WsError("closed by the TNC" + (f" ({struct.unpack('>H', data[:2])[0]})" if len(data) >= 2 else ""))
+            if op == 0x9:
+                self._send(0xA, data)
+                continue
+            if op == 0xA:
+                continue
+            if op in (1, 2):
+                mop, msg = op, data
+            else:
+                msg += data
+            if b0 & 0x80:
+                return mop, msg
+
+    def close(self):
+        try:
+            self._send(0x8, b"\x03\xe8")
+        except OSError:
+            pass
+        self.s.close()
+
+
+# ---- the state the TUI shows ---------------------------------------------------------
+class State:
+    def __init__(self):
+        self.panel = None
+        self.text = [""]          # received text and events, as lines
+        self.note = ""
+        self.mycall = ""
+        self.server = ""
+        self.connected = False
+        self.crypto_built = False # hello.crypto: false in a build without encryption (no encryption line at all)
+        self.crypto = None        # the TNC's "crypto" status (src/web/README.md "Encryption")
+        self.version = 0          # bumped on every change (the screen redraws)
+
+    def add(self, text):
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        parts = text.split("\n")
+        self.text[-1] += parts[0]
+        self.text.extend(parts[1:])
+        del self.text[:-500]
+        self.version += 1
+
+
+class Client:
+    """The TNC's JSON WebSocket: panel states, received text, link events,
+    answers. Reconnects by itself."""
+    def __init__(self, url, auth, st):
+        self.url, self.auth, self.st = url, auth, st
+        self.ws = None
+        self.nid = 1
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def send(self, **m):
+        m["id"] = self.nid
+        self.nid += 1
+        if self.ws:
+            try:
+                self.ws.send_text(json.dumps(m))
+                return True
+            except OSError:
+                pass
+        self.st.add("[not connected]\n")
+        return False
+
+    def _run(self):
+        st, delay = self.st, 0.5
+        while True:
+            try:
+                st.note = f"connecting to {self.url}"
+                st.version += 1
+                ws = Ws(self.url, self.auth)
+                ws.settimeout(None)
+                self.ws, delay = ws, 0.5
+                st.note, st.connected = "", True
+                st.version += 1
+                while True:
+                    op, data = ws.recv()
+                    m = json.loads(data.decode("utf-8", errors="replace"))
+                    self._handle(m)
+            except Exception as e:                  # refused, closed, TNC gone
+                self.ws, st.connected = None, False
+                st.note = f"TNC not reachable at {self.url} ({e}); retrying"
+                st.version += 1
+                time.sleep(delay)
+                delay = min(8.0, delay * 2)
+
+    def _handle(self, m):
+        st, t = self.st, m.get("type")
+        if t == "hello":
+            if m.get("auth") == "required":
+                st.note = "the TNC wants a login: --auth USER:PASS"
+            else:
+                st.mycall, st.server = m.get("mycall", ""), m.get("server", "")
+                st.crypto_built = m.get("crypto") is True
+                if not st.crypto_built:
+                    st.crypto = None
+        elif t == "panel" and m.get("panel"):
+            st.panel = m["panel"]
+        elif t == "crypto" and st.crypto_built:
+            st.crypto = m.get("crypto")
+        elif t == "rx":
+            st.add(m.get("text", ""))
+        elif t == "monitor":
+            st.add(f"[listen] {m.get('who') or '***'}> {m.get('text', '')}\n")
+        elif t == "link":
+            st.add(f"\n[{'link up' if m.get('up') else 'link down'}: {m.get('call', '')}]\n")
+        elif t == "result":
+            if m.get("text"):
+                st.add(m["text"] if m["text"].endswith(("\n", "\r")) else m["text"] + "\n")
+        elif t == "error":
+            st.add(f"[error: {m.get('error')}]\n")
+        st.version += 1
+
+
+# ---- the frame: lines of (text, colour) segments ----------------------------------------
+# The front panel as the GUI draws it (owner, 2026-11-12: a fixed hardware panel): every lamp
+# always there with a fixed label, only the lamps light; changing values only in the display
+# and the readouts. Lamps: Free/Busy (channel), Connect/Call, Send/Chg-over, Traffic/Error, TX;
+# the mode and speed-level lamps P1 100 200 | P2 1 2 3 4 | P3 1 2 3 4 5 6; the tuning row; the
+# Disconnect button (Ctrl-D) with its lamp, lit while a disconnect is in progress; the Peer lamps (Signum,
+# Other) beside the readouts.
+MODES = [(1, ["100", "200"]), (2, ["1", "2", "3", "4"]), (3, ["1", "2", "3", "4", "5", "6"])]
+# the far end's last answer (docs/md/gui.md "The front panel"): the panel's detail.far words, their lamps' colours and labels
+FAR = [("ok", "green"), ("repeat", "red"), ("faster", "green"), ("slower", "yellow"), ("length", "yellow")]
+FAR_LABEL = {"ok": "OK", "repeat": "Repeat", "faster": "Faster", "slower": "Slower", "length": "Long/short"}
+W = 78
+
+
+def leds_of(st):
+    return st.get("leds") or {}
+
+
+def tuning(st, d):
+    """The 15 LEDs of the tuning row: a colour per LED."""
+    if isinstance(st.get("tune_led"), int):  # the TNC's own: the LED, and red past 10 Hz
+        lit = "red" if st.get("freq_led") == "red" else "green"
+        return [lit if i == st["tune_led"] else "off" for i in range(15)]
+    af = d.get("afc_hz")
+    if not isinstance(af, (int, float)) or d.get("state") in (None, "standby"):
+        return ["off"] * 15
+    k = max(0, min(14, round(7 + af / 5)))
+    lit = "green" if abs(af) <= 10 else "red"
+    return [lit if i == k else "off" for i in range(15)]
+
+
+def lamps(st, d, live):
+    """Every lamp of the panel: name -> off/green/red/yellow."""
+    named = leds_of(st)
+    state = d.get("state")
+    linked, calling = state == "connected", state == "calling"
+    ptt = d.get("ptt") if "ptt" in d else named.get("Send/CHO") in ("green", "yellow")
+    m = st.get("mode") or {}
+    o = {"Free/Busy": {"busy": "red", "free": "green"}.get(st.get("busy"), "off"),
+         "Connect/Call": "green" if linked or (state is None and named.get("Connected/Mail") == "yellow") else "red" if calling else "off",
+         "Send/Chg-over": named.get("Send/CHO", "off"),
+         # during a link only: in standby the reference unit shows channel busy there (Free/Busy here)
+         "Traffic/Error": named.get("Traffic/Error", "off") if linked or state is None else "off",
+         "TX": "red" if ptt else "off",
+         "QRT": "yellow" if d.get("qrt") else "off"}
+    # TX row (the level this station sends at) and RX row (the level the other station sends at); an older Signum
+    # sends `level` only, shown on both
+    tx, rx = m.get("tx", m.get("level")), m.get("rx", m.get("level"))
+    for p, lv in MODES:
+        o[f"P{p}"] = "green" if m.get("plevel") == p else "off"
+        for k in range(len(lv)):
+            o[f"P{p}.{k + 1}"] = "yellow" if m.get("plevel") == p and tx == k + 1 else "off"
+            o[f"P{p}.{k + 1}r"] = "yellow" if m.get("plevel") == p and rx == k + 1 else "off"
+    ls = linked and m.get("plevel") in (2, 3) and "tx_long" in m
+    o["L/S"] = ("green" if m.get("tx_long") else "red") if ls else "off"
+    o["L/Sr"] = ("green" if m.get("rx_long") else "red") if ls else "off"
+    # the receive audio level (Low amber, OK green, High amber / Clip red) and the far end's last answer (while we send)
+    a = (st.get("audio") or {}).get("state")
+    o["A.low"], o["A.ok"] = ("yellow" if a == "low" else "off"), ("green" if a == "ok" else "off")
+    o["A.high"] = "yellow" if a == "high" else "red" if a == "clip" else "off"
+    far = d.get("far") if linked and isinstance(d.get("far"), list) else []
+    for k, c in FAR:
+        o["F." + k] = c if k in far else "off"
+    return {k: (v if live and v in ("green", "red", "yellow") else "off") for k, v in o.items()}
+
+
+def readouts(d):
+    """The seven-segment readouts: (caption, width, value or None)."""
+    out = max(0, (d.get("tx_text") or 0) - (d.get("unsent") or 0) - (d.get("unacked") or 0))
+    s = round(d.get("link_s") or 0)
+    q = d.get("quality")
+    # characters a minute each way, over the last minute (rx_cpm / tx_cpm; the total went, 2026-11-22)
+    return [("LINK TIME", 9, f"{min(9, s // 3600)}:{s % 3600 // 60:02d}:{s % 60:02d}"),
+            ("CHARS IN", 8, str(d.get("rx_bytes") or 0)),
+            ("CHARS OUT", 9, str(out)),
+            ("IN/MIN", 6, str(d.get("rx_cpm") or 0)),
+            ("OUT/MIN", 7, str(d.get("tx_cpm") or 0)),
+            ("TO SEND", 9, str((d.get("unsent") or 0) + (d.get("unacked") or 0))),
+            ("QUALITY %", 9, str(q) if isinstance(q, int) and q >= 0 else "---"),
+            ("OFFSET HZ", 9, f"{d.get('afc_hz') or 0:.1f}")]
+
+
+def frame(s, plain=False, scroll=0, rows=None):
+    """The screen as lines; each line a list of (text, colour). colour: None, green, red, yellow, dim, bold."""
+    dot = (lambda c: {"green": "G", "red": "R", "yellow": "Y"}.get(c, ".")) if plain else \
+        (lambda c: "●" if c in ("green", "red", "yellow") else "○")
+    hr = "-" if plain else "─"
+    st = s.panel or {}
+    d = st.get("detail") or {}
+    live = s.connected and bool(st)
+    L = []
+
+    def title(name):
+        head = f"{hr * 2} {name} "
+        L.append([(head + hr * max(0, W - len(head)), "dim")])
+
+    call = d.get("mycall") or s.mycall
+    head = f"Signum · {call}" if call else "Signum"
+    right = f"t {st.get('t', 0):.1f} s" if st else ""
+    if plain:
+        head = head.replace("·", "-")
+    # the CPU temperature (cpu_temp_c), a fixed readout at the top; its lamp amber from 70 °C, red from 80 °C
+    c = st.get("cpu_temp_c") if live else None
+    deg = "" if plain else "°"
+    tc = (f"{c:5.1f}" if isinstance(c, (int, float)) else " --.-") if live else "     "
+    tf = (f"{c * 9 / 5 + 32:5.1f}" if isinstance(c, (int, float)) else "---.-") if live else "     "
+    hot = ("red" if c >= 80 else "yellow" if c >= 70 else "off") if isinstance(c, (int, float)) else "off"
+    temp = [("CPU TEMP ", "dim"), (tc, "red" if live else "dim"), (f"{deg}C ", "dim"), (tf, "red" if live else "dim"), (f"{deg}F ", "dim"),
+            (dot(hot), hot if hot != "off" else "dim")]
+    # CPU health: is this computer keeping up (the panel's "cpu": state ok / busy / starved; information only)
+    cpu = st.get("cpu") if live else None
+    cstate = cpu.get("state") if isinstance(cpu, dict) else None
+    ccol = {"ok": "green", "busy": "yellow", "starved": "red"}.get(cstate, "dim")
+    temp = [("CPU ", "dim"), ((cstate or "--").upper().ljust(7), ccol if cstate else "dim"), ("  ", None)] + temp
+    tw = sum(len(t) for t, _ in temp)
+    pad = max(2, W - len(head) - len(right) - tw - 4)
+    L.append([(head, "bold"), (" " * (pad // 2), None)] + temp + [(" " * (pad - pad // 2 + 4), None), (right, "dim")])
+    if s.note:
+        L.append([(f"  [{s.note}]", "yellow")])
+    if cstate in ("busy", "starved"):
+        # what is late, and what to do (one line each, cut to the width; the log has it in full)
+        L.append([("  " + ("CPU " + cstate.upper() + ": " + (cpu.get("reason") or ""))[:W - 2], ccol)])
+        fb = cpu.get("fallbacks") or []
+        L.append([("  " + ("Do: " + (cpu.get("advice") or "") + ("  Fallback: " + "; ".join(fb) if fb else ""))[:W - 2], "dim")])
+    L.append([])
+    # the display (two lines) and, beside it, the readouts (caption over value)
+    state = d.get("state")
+    role = ("OUTGOING" if d.get("role") == "caller" else "INCOMING" if d.get("role") == "callee" else "") \
+        if state in ("connected", "calling") else (d.get("mycall") or "")
+    l1 = (st.get("text", "") if live else "").ljust(16)[:16]
+    l2 = (role if live else "").ljust(16)[:16]
+    tl, tr, bl, br, h, v = ("+", "+", "+", "+", "-", "|") if plain else ("┌", "┐", "└", "┘", "─", "│")
+    ro = readouts(d)
+    ro_live = live and state == "connected"
+
+    def ro_caps(items):
+        return [("  ", None)] + [(f"{c:>{w}}" + "  ", "dim") for c, w, _ in items]
+
+    def ro_vals(items):
+        segs = [("  ", None)]
+        for c, w, val in items:
+            segs += [(f"{val:>{w}}", "red") if ro_live else (f"{'-':>{w}}", "dim"), ("  ", None)]
+        return segs
+    disp = [[("  " + tl + h * 18 + tr, "dim")],
+            [("  " + v + " ", "dim"), (l1, "green"), (" " + v, "dim")],
+            [("  " + v + " ", "dim"), (l2, "green"), (" " + v, "dim")],
+            [("  " + bl + h * 18 + br, "dim")]]
+    side = [ro_caps(ro[:5]), ro_vals(ro[:5]), ro_caps(ro[5:]), ro_vals(ro[5:])]
+    # the Peer lamps (Signum / Other) beside the last readouts, as the GUI's beside the display
+    pl = peer_lamps(st.get("peer") if live else None)
+    side[2] = side[2] + [("PEER", "dim")]
+    side[3] = side[3] + [(dot(pl[0][0]), pl[0][0] if pl[0][0] != "off" else "dim"), (" Signum  ", None),
+                         (dot(pl[1][0]), pl[1][0] if pl[1][0] != "off" else "dim"), (" Other", None)]
+    for a, b in zip(disp, side):
+        L.append(a + b)
+    L.append([])
+    lp = lamps(st, d, live)
+
+    def lamp(name, label=None):
+        c = lp[name]
+        return [(dot(c), c if c != "off" else "dim"), (" " + (label or name), None)]
+    line = [("  ", None)] + lamp("Free/Busy") + [("  |  " if plain else "  │  ", "dim")]   # the channel | the link
+    for n in ("Connect/Call", "Send/Chg-over", "Traffic/Error", "TX"):
+        line += lamp(n) + [("  ", None)]
+    L.append(line)
+    # two lines: TX (with the mode lamps) over RX (the mode lamps' place left blank); long/short at the end of each
+    sep = " | " if plain else " │ "
+    for row, suf in (("  MODE TX  ", ""), ("       RX  ", "r")):
+        line = [(row, "dim")]
+        for i, (p, lv) in enumerate(MODES):
+            if i:
+                line.append((sep, "dim"))
+            line += lamp(f"P{p}") + [(" ", None)] if not suf else [(" " * (len(f"P{p}") + 3), None)]
+            for k, n in enumerate(lv):
+                line += [(" ", None)] + lamp(f"P{p}.{k + 1}{suf}", n)
+        line += [(sep, "dim")] + lamp(f"L/S{suf}", "L/S")
+        L.append(line)
+    tun = tuning(st, d) if live else ["off"] * 15
+    line = [("  TUNING  ", "dim")]
+    for i, c in enumerate(tun):
+        line.append((dot(c) if c != "off" else ("|" if i == 7 else ".") if plain else ("┃" if i == 7 else "·"), c if c != "off" else "dim"))
+    line += [(" " * 14, None), ("[ ", "bold"), (dot(lp["QRT"]), lp["QRT"] if lp["QRT"] != "off" else "dim"), (" DISCONNECT ]", "bold"),
+             ("  Ctrl-D, twice: at once", "dim")]
+    L.append(line)
+    # what the receiver hears: the S/N in dB (3 kHz; "--" not measurable), the audio level lamps, the radio's frequency
+    # (the PTT's rig control; "------" none); then the far end's last answer (while we send)
+    sn = d.get("snr_db")
+    snr = (f"{max(-9, min(99, round(sn))):>3}" if state == "connected" and isinstance(sn, (int, float)) else " --") if live else "   "
+    fk = st.get("freq_khz") if live else None
+    khz = (f"{fk:9.2f}" if isinstance(fk, (int, float)) and fk > 0 else "   ------") if live else " " * 9
+    line = [("  S/N ", "dim"), (snr, "red" if live else "dim"), (" dB   RX AUDIO  ", "dim")]
+    for n, label in (("A.low", "Low"), ("A.ok", "OK"), ("A.high", "High/Clip")):
+        line += lamp(n, label) + [("  ", None)]
+    line += [(" RADIO ", "dim"), (khz, "red" if live else "dim"), (" kHz", "dim")]
+    L.append(line)
+    line = [("  FAR END  ", "dim")]
+    for k, _ in FAR:
+        line += lamp("F." + k, FAR_LABEL[k]) + [("  ", None)]
+    L.append(line)
+    if s.crypto_built:
+        line = [("  CRYPTO  ", "dim")]
+        blink_off = int(time.time() * 2) % 2 == 1          # a blinking lamp is dark every other half second
+        for name, (c, blink) in zip(("Armed", "Key/Fail", "Secure", "Verified"), crypto_lamps(s.crypto if live else None)):
+            shown = "off" if blink and blink_off and not plain else c
+            line += [(dot(shown), shown if shown != "off" else "dim"), (" " + name + "  ", None)]
+        L.append(line)
+        L.append(crypto_line(s.crypto if live else None))
+    if "margin_ms" in d:
+        mm = d.get("margin_ms")
+        L.append([])
+        L.append([("  Decode margin ", "dim"), ("late" if mm == -1 else "–" if mm is None else f"{mm:.0f} ms", "red" if mm == -1 else None),
+                  ("   late ", "dim"), (str(d.get("late", 0)), "red" if d.get("late") else None),
+                  ("   back-off ", "dim"), (f"not above SL{d.get('p3_cap')}" if (d.get("p3_cap") or 6) < 6 else "none", None)])
+    L.append([])
+    title("Received text and answers")
+    fixed = len(L) + 2
+    nrows = (rows - fixed) if rows else 6
+    nrows = max(1, nrows)
+    lines = s.text[:]
+    end = len(lines) - scroll
+    for t in lines[max(0, end - nrows):max(0, end)]:
+        L.append([("  " + t[:W - 2], None)])
+    return L
+
+
+def peer_lamps(p):
+    """The Peer lamps (as the GUI's peerLampStates, docs/md/gui.md "The front panel"): [(colour, text)] for Signum
+    (green: the other station sent Signum's marker or encryption record) and Other (amber: with the marker on
+    here, none in its first 64 characters). p: the panel's "peer" (None: offline)."""
+    if not isinstance(p, dict):
+        return [("off", "not connected"), ("off", "not connected")]
+    lamp, link = p.get("lamp") or "off", p.get("link") or 0
+    if not link:
+        now = "standby"
+    elif link == 1:
+        now = "P1: no marker"
+    elif lamp == "signum":
+        now = "Signum" + (" " + p["version"] if p.get("version") else "")
+    elif lamp == "other":
+        now = "not a Signum (no marker in its first 64 characters)"
+    else:
+        now = "not known yet" if p.get("marker") else "not known (marker off)"
+    return [("green" if lamp == "signum" and link >= 2 else "off", now), ("yellow" if lamp == "other" and link >= 2 else "off", now)]
+
+
+def crypto_lamps(c):
+    """The Crypto lamps (as the GUI's, docs/md/gui.md "The front panel"): [(colour, blinking)] for Armed, Key/Fail,
+    Secure, Verified. Armed green: encryption on. Key: blinking amber set-up running, green session keys agreed,
+    red set-up failed (this link, or the last one until the next link), steady amber a received key waiting.
+    Secure green: encrypted. Verified green: the other station's key verified (or a pre-shared key set for that
+    station alone), amber: not verified. c: the crypto status (None: not connected)."""
+    if not c:
+        return [("off", False)] * 4
+    lk = c.get("link") or {}
+    state = lk.get("state") or "idle"
+    arm = ("green" if c.get("on") or c.get("protection") == "verify" else "off", False)   # verify: armed too (identity check)
+    if state == "failed" or (state == "idle" and lk.get("last_failed")):
+        key = ("red", False)
+    elif state in ("waiting", "handshake"):
+        key = ("yellow", True)
+    elif state in ("secure", "verified"):
+        key = ("green", False)
+    elif c.get("received"):
+        key = ("yellow", False)
+    else:
+        key = ("off", False)
+    sec = ("green" if state == "secure" else "off", False)
+    if state not in ("secure", "verified"):                  # verified: the identity check, data in clear (Secure dark)
+        ver = ("off", False)
+    elif lk.get("peer_fingerprint"):
+        ver = ("green" if lk.get("peer_verified") else "yellow", False)
+    else:
+        ver = ("green" if lk.get("psk") and lk.get("psk") != "*" else "yellow", False)
+    return [arm, key, sec, ver]
+
+
+def crypto_line(c):
+    """The encryption line (only in a build with encryption; one line, always there): off, on, the link's
+    set-up, ENCRYPTED with the SAS and the other station's key, or FAILED with the reason (the link was
+    ended; nothing goes in clear). Keys received over the air and waiting are counted."""
+    head = ("  ENCRYPTION  ", "dim")
+    if not c:
+        return [head, ("--", "dim")]
+    lk = c.get("link") or {}
+    state = lk.get("state") or "idle"
+    on = ("VERIFY", "green") if c.get("protection") == "verify" else ("ON", "green")
+    if not c.get("on") and c.get("protection") != "verify" and state in ("idle", "plain"):
+        seg = [("OFF", "dim")]
+    elif state == "idle" and lk.get("last_failed"):
+        lf = lk["last_failed"]
+        seg = [on, (f" last link ({lf.get('call', '')}) FAILED: " + (lf.get("reason") or "") + " (nothing sent in clear or unverified)", "red")]
+    elif state == "idle":
+        seg = [on, (" no link" + (" (identity check, data in clear)" if on[0] == "VERIFY" else ""), None)]
+        if not c.get("have_key") and not c.get("psks"):
+            seg = [on, (" no key pair, no pre-shared key: links refused", "red")]
+    elif state in ("waiting", "handshake"):
+        seg = [("SETTING UP", "yellow"), (f" {lk.get('call', '')}: " + ("waiting for its capability record" if state == "waiting" else f"handshake {lk.get('pattern', '')}"), None)]
+    elif state == "secure":
+        seg = [("ENCRYPTED", "green"), (f" {lk.get('call', '')} {lk.get('pattern', '')}  SAS {lk.get('sas', '')}  key ", None),
+               ("verified" if lk.get("peer_verified") else "NOT verified", "green" if lk.get("peer_verified") else "yellow")]
+    elif state == "verified":
+        seg = [("VERIFIED, IN CLEAR", "green"), (f" {lk.get('call', '')} {lk.get('pattern', '')}" + (" signed" if lk.get("signed") else "") + f"  SAS {lk.get('sas', '')}  key ", None),
+               ("verified" if lk.get("peer_verified") else "NOT verified", "green" if lk.get("peer_verified") else "yellow")]
+    elif state == "failed":
+        seg = [("FAILED", "red"), (": " + (lk.get("reason") or "") + " (link ended, nothing sent in clear)", "red")]
+    else:
+        seg = [(state.upper(), None)]
+    n = len(c.get("received") or [])
+    if n:
+        seg.append((f"  {n} key{'s' if n > 1 else ''} received: CRYPTO RECEIVED", "yellow"))
+    out, room = [head], W - len(head[0])
+    for t, col in seg:
+        if room <= 0:
+            break
+        out.append((t[:room], col))
+        room -= len(t[:room])
+    return out
+
+
+def plain_text(lines):
+    return "\n".join("".join(t for t, _ in line).rstrip() for line in lines)
+
+
+def disconnect_key(cl, st, disc_at, now=None):
+    """The Disconnect button (Ctrl-D), as the GUI's: "D" (the API's disconnect); pressed again
+    while that disconnect is in progress (its lamp lit, or within 2 s), "DD" (abort). Nothing
+    with no link and no call. Returns the time of the D sent (0 after a DD)."""
+    now = time.time() if now is None else now
+    d = (st.panel or {}).get("detail") or {}
+    if not st.connected or d.get("state") not in ("connected", "calling"):
+        return disc_at
+    if d.get("qrt") or now - disc_at < 2.0:
+        cl.send(type="abort")
+        st.add("DD\n")
+        return 0.0
+    cl.send(type="disconnect")
+    st.add("D\n")
+    return now
+
+
+# ---- curses --------------------------------------------------------------------------------
+def run_curses(url, auth):
+    import curses
+    st = State()
+    cl = Client(url, auth, st)
+
+    def main(scr):
+        curses.curs_set(1)
+        scr.timeout(100)
+        scr.keypad(True)
+        cols = {}
+        if curses.has_colors():
+            curses.start_color()
+            try:
+                curses.use_default_colors()
+                bg = -1
+            except curses.error:
+                bg = curses.COLOR_BLACK
+            for i, (name, c) in enumerate([("green", curses.COLOR_GREEN), ("red", curses.COLOR_RED), ("yellow", curses.COLOR_YELLOW),
+                                           ("dim", curses.COLOR_WHITE)], 1):
+                curses.init_pair(i, c, bg)
+                cols[name] = curses.color_pair(i) | (curses.A_BOLD if name != "dim" else curses.A_DIM)
+        cols["bold"] = curses.A_BOLD
+        line, scroll, hist, hpos, disc_at = "", 0, [], 0, 0.0
+        while True:
+            hgt, wid = scr.getmaxyx()
+            if True:                      # redrawn every 100 ms (the panel changes up to 20 times a second)
+                scr.erase()
+                fr = frame(st, scroll=scroll, rows=hgt - 2)
+                for y, segs in enumerate(fr[:hgt - 2]):
+                    x = 0
+                    for text, c in segs:
+                        if x >= wid - 1:
+                            break
+                        try:
+                            scr.addstr(y, x, text[:wid - 1 - x], cols.get(c, 0))
+                        except curses.error:
+                            pass
+                        x += len(text)
+                help_ = "Enter: command   >text: send   /c CALL   Ctrl-D: disconnect (twice: at once)   /d /dd /q"
+                try:
+                    scr.addstr(hgt - 2, 0, help_[:wid - 1], cols.get("dim", 0))
+                    prompt = "cmd> " + line
+                    scr.addstr(hgt - 1, 0, prompt[-(wid - 1):])
+                except curses.error:
+                    pass
+                scr.move(hgt - 1, min(wid - 1, len("cmd> " + line)))
+                scr.refresh()
+            try:
+                k = scr.get_wch()
+            except curses.error:
+                continue
+            except KeyboardInterrupt:
+                return
+            if k in ("\n", "\r", curses.KEY_ENTER):
+                cmd, line = line.strip(), ""
+                if cmd:
+                    hist.append(cmd)
+                    hpos = len(hist)
+                if not cmd:
+                    continue
+                if cmd in ("/q", "/quit"):
+                    return
+                if cmd.startswith(">"):
+                    cl.send(type="send", text=cmd[1:] + "\r")
+                    st.add(f"> {cmd[1:]}\n")
+                elif cmd.lower().startswith("/c "):
+                    cl.send(type="connect", call=cmd[3:].strip().upper())
+                elif cmd.lower() == "/d":
+                    cl.send(type="disconnect")
+                elif cmd.lower() == "/dd":
+                    cl.send(type="abort")
+                else:
+                    st.add(f"cmd: {cmd}\n")
+                    cl.send(type="command", line=cmd)
+                scroll = 0
+            elif k in (curses.KEY_BACKSPACE, "\b", "\x7f"):
+                line = line[:-1]
+            elif k == curses.KEY_PPAGE:
+                scroll = min(len(st.text) - 1, scroll + 5)
+            elif k == curses.KEY_NPAGE:
+                scroll = max(0, scroll - 5)
+            elif k == curses.KEY_UP and hist:
+                hpos = max(0, hpos - 1)
+                line = hist[hpos]
+            elif k == curses.KEY_DOWN and hist:
+                hpos = min(len(hist), hpos + 1)
+                line = hist[hpos] if hpos < len(hist) else ""
+            elif k == "\x03":
+                return
+            elif k == "\x04":            # the Disconnect button: D; again while it is in progress, DD
+                disc_at = disconnect_key(cl, st, disc_at)
+            elif isinstance(k, str) and k.isprintable():
+                line += k
+
+    try:
+        curses.wrapper(main)
+    except KeyboardInterrupt:
+        pass
+
+
+def run_once(url, auth, wait=5.0):
+    """One frame as plain text: the first panel state, or what went wrong."""
+    st = State()
+    Client(url, auth, st)
+    t0 = time.time()
+    while time.time() - t0 < wait and not st.panel:
+        time.sleep(0.05)
+    time.sleep(0.2)                       # the backlog and answers that come with hello
+    print(plain_text(frame(st, plain=True)))
+    return 0 if st.panel else 1
+
+
+def main():
+    args = sys.argv[1:]
+    if "-h" in args or "--help" in args:
+        print(__doc__)
+        return 0
+    auth = None
+    if "--auth" in args:
+        i = args.index("--auth")
+        auth = args[i + 1] if i + 1 < len(args) else None
+        del args[i:i + 2]
+    once = "--once" in args
+    pos = [a for a in args if not a.startswith("--")]
+    url = pos[0] if pos else DEFAULT_URL
+    if once:
+        return run_once(url, auth)
+    if not sys.stdout.isatty():
+        sys.exit("signum-tui: not a terminal (use --once for one plain frame)")
+    run_curses(url, auth)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

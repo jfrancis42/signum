@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jeff Francis, N0GQ
+# Example only: not enabled. Hamlib rigctld owning the radio's USB serial port, so Pat can change the
+# frequency and Signum keys through it (--ptt rig:127.0.0.1:4532). docs/md/connections.md "Pat changing the frequency".
+# Set the port, the Hamlib model (rigctl -l; 3073 = IC-7300), the CI-V address and the radio's CI-V USB baud rate.
+# Localhost only: anything that reaches rigctld can key the radio.
+[Unit]
+Description=rigctld for Signum's radio
+After=network.target
+
+[Service]
+User=signum
+SupplementaryGroups=dialout
+ExecStart=/usr/bin/rigctld -m 3073 -r /dev/serial/by-id/CHANGE-ME -s 115200 -c 0x94 -P RTS -p /dev/serial/by-id/CHANGE-ME -T 127.0.0.1 -t 4532 --set-conf=dtr_state=OFF
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

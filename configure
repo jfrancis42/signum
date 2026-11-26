@@ -1,0 +1,135 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jeff Francis, N0GQ
+# configure: hand-written (not autotools) for Signum. Checks the C++17
+# compiler and ALSA, writes config.mk, which the Makefile includes.
+prefix=/usr/local bindir= datadir= sysconfdir= mandir= host= crypto=no
+for a in "$@"; do
+	case $a in
+		--prefix=*) prefix=${a#*=} ;;
+		--bindir=*) bindir=${a#*=} ;;
+		--datadir=*) datadir=${a#*=} ;;
+		--sysconfdir=*) sysconfdir=${a#*=} ;;
+		--mandir=*) mandir=${a#*=} ;;
+		--host=*) host=${a#*=} ;;
+		--enable-encryption) crypto=yes ;;
+		--no-encryption|--disable-encryption) crypto=no ;;
+		CXX=*) CXX=${a#*=} ;;
+		CXXFLAGS=*) CXXFLAGS=${a#*=} ;;
+		LDFLAGS=*) LDFLAGS=${a#*=} ;;
+		-h|--help)
+			cat <<H
+Usage: ./configure [options] [VAR=value ...]
+
+  --prefix=DIR       install under DIR (default /usr/local)
+  --bindir=DIR       programs (default PREFIX/bin)
+  --datadir=DIR      data (default PREFIX/share); GUI and TUI go to DATADIR/signum
+  --sysconfdir=DIR   sample config (default PREFIX/etc, /etc for prefix /usr)
+  --mandir=DIR       man pages (default DATADIR/man)
+  --host=TRIPLET     cross build: CXX defaults to TRIPLET-g++
+  --enable-encryption  build with encryption (needs OpenSSL 3 and zstd). Without
+                     it (the default, or --no-encryption) no OpenSSL or zstd is
+                     needed, and the program, its options, commands, settings and
+                     the GUI have no encryption features at all (docs/md/encryption.md)
+  CXX, CXXFLAGS, LDFLAGS       compiler and flags (environment or VAR=value)
+
+Needs a C++17 compiler and the ALSA headers and library (Debian libasound2-dev,
+Fedora alsa-lib-devel); with --enable-encryption also OpenSSL's libcrypto
+3.0 or later and zstd 1.4 or later (Debian/Ubuntu/Raspberry Pi OS: libssl-dev
+libzstd-dev; Fedora: openssl-devel libzstd-devel; Arch: openssl zstd).
+Then: make && make install [DESTDIR=...]
+H
+			exit 0 ;;
+		*) echo "configure: unknown option $a (see --help)" >&2; exit 1 ;;
+	esac
+done
+[ -n "$bindir" ] || bindir=$prefix/bin
+[ -n "$datadir" ] || datadir=$prefix/share
+if [ -z "$sysconfdir" ]; then
+	if [ "$prefix" = /usr ]; then sysconfdir=/etc; else sysconfdir=$prefix/etc; fi
+fi
+[ -n "$mandir" ] || mandir=$datadir/man
+if [ -z "${CXX:-}" ]; then
+	if [ -n "$host" ]; then CXX=$host-g++; else CXX=g++; fi
+fi
+: "${CXXFLAGS:=-std=c++17 -O2 -g -Wall -Wextra -pthread}"
+: "${LDFLAGS:=}"
+case $CXXFLAGS in *-std=*) ;; *) CXXFLAGS="-std=c++17 $CXXFLAGS" ;; esac
+case $CXXFLAGS in *-pthread*) ;; *) CXXFLAGS="$CXXFLAGS -pthread" ;; esac
+
+t=${TMPDIR:-/tmp}/signum-conf.$$
+mkdir "$t" || exit 1
+trap 'rm -rf "$t"' EXIT
+fail() { echo "configure: error: $1" >&2; exit 1; }
+
+printf 'checking for a C++17 compiler (%s)... ' "$CXX"
+cat > "$t/a.cpp" <<'C'
+#include <optional>
+#include <string_view>
+int main() { std::optional<int> o = 1; auto f = [](auto x) { return x; }; return *o - f(1); }
+C
+if $CXX $CXXFLAGS $LDFLAGS "$t/a.cpp" -o "$t/a" >/dev/null 2>&1; then echo yes
+else echo no; fail "$CXX does not build C++17 programs (needs g++ 8 or later; set CXX=...)"; fi
+
+printf 'checking for pkg-config... '
+if command -v ${host:+$host-}pkg-config >/dev/null 2>&1; then PKG=${host:+$host-}pkg-config; echo yes
+elif command -v pkg-config >/dev/null 2>&1; then PKG=pkg-config; echo yes
+else PKG=; echo "no (optional)"; fi
+
+printf 'checking for ALSA (alsa/asoundlib.h, -lasound)... '
+cat > "$t/b.cpp" <<'C'
+#include <alsa/asoundlib.h>
+int main() { snd_pcm_t *h = 0; return snd_pcm_close(h) ? 1 : 0; }
+C
+acf= alibs=-lasound
+if [ -n "$PKG" ] && $PKG --exists alsa 2>/dev/null; then
+	acf=$($PKG --cflags alsa); alibs=$($PKG --libs alsa)
+fi
+if $CXX $CXXFLAGS $acf $LDFLAGS "$t/b.cpp" -o "$t/b" $alibs >/dev/null 2>&1; then echo yes
+else echo no; fail "ALSA headers or library not found. Install libasound2-dev (Debian/Ubuntu) or alsa-lib-devel (Fedora/RHEL), or give CXXFLAGS/LDFLAGS for it"; fi
+
+ccf= clibs=
+if [ "$crypto" = yes ]; then
+	printf 'checking for OpenSSL 3 libcrypto (X25519, AES-256-GCM)... '
+	cat > "$t/c.cpp" <<'C'
+#include <openssl/evp.h>
+#include <openssl/hmac.h>
+#include <openssl/opensslv.h>
+#if OPENSSL_VERSION_MAJOR < 3
+#error OpenSSL 3 or later (Apache-2.0: GPL-3.0 compatible) is needed
+#endif
+int main() { unsigned char k[32] = {1}; EVP_PKEY *p = EVP_PKEY_new_raw_private_key(EVP_PKEY_X25519, 0, k, 32); EVP_PKEY_free(p); return EVP_aes_256_gcm() ? 0 : 1; }
+C
+	ocf= olibs=-lcrypto
+	if [ -n "$PKG" ] && $PKG --exists 'libcrypto >= 3.0.0' 2>/dev/null; then ocf=$($PKG --cflags libcrypto); olibs=$($PKG --libs libcrypto); fi
+	if $CXX $CXXFLAGS $ocf $LDFLAGS "$t/c.cpp" -o "$t/c" $olibs >/dev/null 2>&1; then echo yes
+	else echo no; fail "OpenSSL libcrypto 3.0 or later not found, needed for encryption. Install libssl-dev (Debian, Ubuntu, Raspberry Pi OS, Mint), openssl-devel (Fedora) or openssl (Arch), or build without encryption: ./configure without --enable-encryption"; fi
+	printf 'checking for zstd (dictionary streaming)... '
+	cat > "$t/z.cpp" <<'C'
+#include <zstd.h>
+int main() { ZSTD_CCtx *c = ZSTD_createCCtx(); ZSTD_CCtx_setParameter(c, ZSTD_c_compressionLevel, 19); ZSTD_freeCCtx(c); return ZSTD_versionNumber() >= 10400 ? 0 : 1; }
+C
+	zcf= zlibs=-lzstd
+	if [ -n "$PKG" ] && $PKG --exists 'libzstd >= 1.4.0' 2>/dev/null; then zcf=$($PKG --cflags libzstd); zlibs=$($PKG --libs libzstd); fi
+	if $CXX $CXXFLAGS $zcf $LDFLAGS "$t/z.cpp" -o "$t/z" $zlibs >/dev/null 2>&1; then echo yes
+	else echo no; fail "zstd (1.4 or later) not found, needed for encryption. Install libzstd-dev (Debian, Ubuntu, Raspberry Pi OS, Mint), libzstd-devel (Fedora) or zstd (Arch), or build without encryption: ./configure without --enable-encryption"; fi
+	ccf="$ocf $zcf" clibs="$olibs $zlibs"
+else
+	echo "encryption: not built (./configure --enable-encryption to build it)"
+fi
+
+cat > config.mk <<M
+# written by ./configure; delete it to go back to the Makefile's defaults
+CXX      = $CXX
+CXXFLAGS = $CXXFLAGS $acf $ccf
+LDFLAGS  = $LDFLAGS
+LIBS     = $alibs $clibs
+CRYPTO   = $crypto
+CRYPTO_LIBS = $clibs
+prefix     = $prefix
+bindir     = $bindir
+datadir    = $datadir
+sysconfdir = $sysconfdir
+mandir     = $mandir
+M
+echo "configure: wrote config.mk (prefix $prefix, encryption $crypto); now: make && make install"

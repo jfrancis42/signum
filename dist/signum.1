@@ -1,0 +1,315 @@
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.\" Copyright (C) 2026 Jeff Francis, N0GQ
+.TH SIGNUM 1 "2026" "Signum" "User Commands"
+.SH NAME
+signum \- P1/P2/P3 HF data modem with the classic host-mode interface
+.SH SYNOPSIS
+.B signum
+[\fIoptions\fR]
+.br
+.B signum-start
+[\-\-no\-tui] [\-\-bin PATH] [\fIsignum options\fR]
+.br
+.B signum-loopback
+start|stop|status
+.SH DESCRIPTION
+Signum is an HF data modem (P1, P2 and P3) behind the classic host-mode
+serial interface on a pty, with a web GUI, a WebSocket API, a command shell
+and a command interpreter on raw TCP (telnet). \fBsignum-start\fR runs it
+together with the terminal front panel; \fBsignum-loopback\fR runs two
+stations joined by the ALSA loopback for trying it without a radio.
+.SH OPTIONS
+.TP
+.BI \-\-call " CALL"
+Own call sign (default N0CALL).
+.TP
+.BI \-\-pty " PATH"
+Host-mode serial interface (default /tmp/ttysignum0; \fBnone\fR: no pty).
+.TP
+.BI \-\-alsa " DEV"
+Sound card (for example plughw:CARD=CODEC), 48 kHz mono.
+.TP
+.BI \-\-audio\-in " F " \-\-audio\-out " F"
+Lockstep FIFO audio link instead (tests, a second instance).
+.TP
+.BI \-\-ptt " SPEC"
+rts:TTY, dtr:TTY, civ:TTY:ADDR[:BAUD], rig[:HOST[:PORT]], vox or none.
+civ: needs the radio's CI-V address in hex (IC-7300: 94); BAUD defaults to 19200.
+rig: talks to Hamlib's rigctld, default 127.0.0.1:4532; it also reads the
+radio's frequency for the front panel (\fBf\fR, read only, every 2 s in
+standby, never during a call or a link).
+Do not use vox: the far station answers about 0.14 s after our packet,
+inside a VOX hang time, so its answers are lost (a warning at start).
+.TP
+.BI \-\-max\-key " S"
+Key-down watchdog (default 90 s).
+.TP
+.BI \-\-tx\-gain " DB"
+Output level (default 0).
+.TP
+.BI \-\-tones " LO,HI"
+Tone pair (default 1400,1600).
+.TP
+.BI \-\-mylevel " 1|2|3"
+Highest level (default 3).
+.TP
+.BI \-\-pduplex " on|off"
+Automatic changeover in every mode (the \fBPDuplex\fR command: 1 or 0).
+\fBoff\fR (the default, as the reference unit): while receiving, Signum
+breaks in only when the sender hands the link over, when the operator
+presses the break-in key (Ctrl-Y; host mode \fB%O\fR or \fB%I\fR) or to
+disconnect; text typed while receiving waits. While sending, it hands the
+link over only on Ctrl-Y (host mode \fB%O\fR). \fBon\fR: it also breaks in
+whenever text is waiting, except within \fB\-\-pdtimer\fR seconds of the
+other station's break-in, and hands over whenever its text has run out.
+.TP
+.BI \-\-pdtimer " S"
+The \fBPDTimer\fR command: 2\-30 s, default 12 (used with \fB\-\-pduplex on\fR).
+.TP
+.B \-\-listen
+Listen mode on at start.
+.TP
+.BI \-\-tune\-tone " S"
+Tune for up to S seconds (1\-10; default 0 = off) before each new call
+we place, so an automatic antenna tuner can tune: the radio's own tuner cycle
+through rigctld, or a steady tone (see \fB\-\-tune\-method\fR); then call as
+usual. Not on the call's own repeats, not as callee, not for unproto.
+Console command \fBTUnetone\fR [S [HZ [DB]]] [auto|tone|radio].
+.TP
+.BI \-\-tune\-method " auto|tone|radio"
+How to tune. \fBauto\fR (the default): the radio's own tune cycle (rigctld
+\fBG TUNE\fR) when \fB\-\-ptt rig\fR reaches a rigctld whose rig lists the TUNE
+VFO operation (\fB\\dump_caps\fR, asked once per connection), otherwise the tone.
+\fBtone\fR: always the tone. \fBradio\fR: the radio's tune; when that is not
+possible the log says why and the tone is sent, never nothing. The radio's
+tune transmits at the \fIradio's\fR RF POWER setting, not at the data level;
+Signum does not key itself; an abort drops the call. The wait ends when the
+radio has keyed and is back in receive, else after S seconds. The log's
+\fB[tune]\fR lines say which method was used and why.
+.TP
+.BI \-\-tune\-hz " HZ"
+The tuning tone's frequency, 300\-2700 Hz (default 1500).
+.TP
+.BI \-\-tune\-db " DB"
+The tuning tone's level against the data level, \-30 to 0 dB (default 0:
+the same power as the P1 call packets).
+.TP
+.BI \-\-alc\-warn " on|off"
+Warn when the radio's ALC acts while we send P2/P3 (console command
+\fBALCwarn\fR 1 or 0). \fBon\fR (the default): while keyed on a P2/P3 link,
+when the PTT is \fBrig:\fR, Signum reads the radio's ALC meter through
+rigctld (\fBl ALC\fR) every 0.25 s on a connection of its own, and writes one
+\fB[alc]\fR warning to the log per link (also on the GUI's Drive (ALC) card
+and in the WebSocket panel's \fBalc\fR object) when the ALC reached 0.50 on 3 of
+the last 6 bursts, with a summary at the link's end. It only warns: it never
+changes the TX gain or the radio's power. Without a rigctld PTT, or when the
+radio gives no ALC reading, it says so once and does nothing. \fBoff\fR reads
+nothing.
+.TP
+.BI \-\-peer\-marker " on|off"
+The Signum peer marker (console command \fBPEERmark\fR 1 or 0). \fBon\fR
+(the default, a deliberate difference from the reference unit, which has
+none): once on each P2/P3 link Signum sends a short system sequence that
+the reference unit skips silently, so that two Signums recognise each other
+(the front panel's Peer lamps: Signum, Other). Never sent on P1. \fBoff\fR:
+nothing extra is sent.
+.TP
+.B \-\-p3\-unproto\-rx
+Listen mode also prints P3 unproto transmissions (U 30-41). Off by default:
+the reference unit has no P3 unproto receiver.
+.TP
+.BI \-\-prime\-ms " MS"
+Playback prime (default 40 ms).
+.TP
+.B \-\-quiet
+No modem log on standard output.
+.TP
+.BI \-\-cal " FILE"
+Timing calibration (default ~/.config/signum/calibration.conf).
+.TP
+.BI \-\-rt\-latency " S", " \-\-audio\-ppm " E
+Override the calibration file.
+.TP
+.B \-\-no\-autocal
+No self-calibration (by default the sound card's rate error and the hardware
+round trip are measured from links when the file does not give them).
+.TP
+.BI \-\-autocal\-state " FILE"
+Where the self-calibration keeps what it measured (default
+~/.config/signum/autocal-DEV.conf, one per sound card).
+.TP
+.BI \-\-autocal\-max\-ms " N"
+Self-calibration: hardware round-trip readings above N ms are refused
+(default 45; environment AUTOCAL_HW_MAX_MS=N the same, the option wins).
+Raise it for a radio path known to be slower (an SDR transceiver); a far
+station on this modem code, which answers some 60 ms later than the
+reference unit, is then taken for hardware too.
+.TP
+.BI \-\-cpu\-adaptive " on|off"
+Adaptive CPU features at start (the \fBCPUadapt\fR command: 1 or 0).
+\fBon\fR (the default): features that need more computing are used and
+switched off, level by level, when this computer's decodes come late; for
+now one feature, long packets as P3 receiver (a late long decode at level n
+stops them above n \- 1, one with less than 8 ms to spare above n; kept from
+link to link). \fBoff\fR: never used (no retries on a slow computer). The
+environment variable P3_LONG_RT=0 or 1 forces never or always (tests).
+.TP
+.BI \-\-cpu\-clock " auto|max|off"
+With \-\-alsa: hold the CPU clock at its maximum while a link is up
+(\fBauto\fR, the default), for the whole run (\fBmax\fR), or never
+(\fBoff\fR). Each cpufreq policy's scaling_min_freq is set to its
+scaling_max_freq and written back in standby and on exit; it needs that file
+writable (example unit signum-cpufreq.service in the examples directory).
+.TP
+.BI \-\-telnet " PORT"
+Command interpreter on TCP (default 3000; 0 = off), with
+.BI \-\-telnet\-bind " ADDR"
+and
+.BI \-\-telnet\-auth " PASS".
+.TP
+.BI \-\-ws " [ADDR:]PORT"
+GUI and WebSocket address (default 127.0.0.1:8770);
+.B \-\-no\-ws
+turns them off.
+.TP
+.BI \-\-web\-auth " USER:PASS", " \-\-ws\-auth " USER:PASS
+Logins for the GUI pages and for the WebSocket API (open by default);
+\fB\-\-web\-auth\-file\fR F and \fB\-\-ws\-auth\-file\fR F read USER:PASS from
+the first line of a file that is not a # comment.
+.TP
+.BI \-\-gui " DIR"
+Directory served over HTTP (default: the installed www directory).
+.TP
+.BI \-\-config " FILE"
+The settings file (default ~/.config/signum/signum.conf, or
+.B SIGNUM_CONFIG
+in the environment): "option = value" lines, the long options without
+"\-\-", flags on or off. It is read first, so the command line overrides it.
+The GUI's Configure tab writes it.
+.TP
+.B \-\-no\-config
+No settings file (SIGNUM_CONFIG=none does the same).
+.TP
+.BI \-\-encryption " off|verify|on"
+off (default). \fBverify\fR: check the other Signum's identity at link start (the same keys
+and handshake as encryption), then send the data in clear; no acknowledgement; a link where the
+check cannot be made (the reference unit, an older Signum, an untrusted key) is ended, never
+continued unverified. \fBon\fR: encrypt links to other Signums. \fBIllegal on the amateur
+radio bands\fR (USA: 47 CFR 97.113(a)(4)); NOT compatible with the AES of SCS
+modems (the PTC series) or any other modem's; never falls back to clear text: a link that
+cannot be encrypted is ended. Needs \-\-encryption\-ack the first time. Only in a build made
+with \fB./configure \-\-enable\-encryption\fR (not the default).
+.TP
+.B \-\-encryption\-ack NOT-AMATEUR|none
+The acknowledgement that this station is not on the amateur bands. The first time
+it is given it is stored in the settings file (encryption-ack), and
+\fB\-\-encryption on\fR then needs no more. \fBnone\fR withdraws it, removes
+encryption from the settings file too, and starts with encryption off.
+.TP
+.BI \-\-encryption\-trust " stored|tofu|verified"
+Encryption's first-contact policy. tofu (default): a new station's key is stored unverified at first contact;
+stored: only a key already stored; verified: only keys you verified.
+.TP
+.BI \-\-verify\-trust " stored|tofu|verified"
+The same for verify; default stored.
+.TP
+.BI \-\-sign " on|off"
+Verify: an authentication tag on every record (the data still in clear; a bad tag ends the
+link). off (default): the identity is checked at link start only, and a takeover after the
+check is not detected. No extra effect with encryption on.
+.TP
+.BI \-\-encryption\-wait " S"
+The capability record and the handshake, each at most S seconds (10-600,
+default 60).
+.TP
+.BI \-\-encryption\-compression " on|off"
+Compress before encrypting (zstd with a dictionary; default on). Used only
+when both Signums have it on; otherwise the records go uncompressed.
+.TP
+.BI \-\-key\-dir " DIR"
+The encryption keys (default ~/.config/signum/keys; the environment variable SIGNUM_KEY_DIR replaces the default).
+.TP
+.B \-\-keygen, \-\-show\-key
+Make this station's key pair if it has none, or show it; print the public
+key and its fingerprint, and exit.
+.TP
+.B \-\-version, \-\-help
+.SS Icom IC-7300 set-up
+One action each, then Signum exits. None changes the radio's transmit power
+or frequency, and none transmits.
+.TP
+.B \-\-detect\-ic7300
+Find every IC-7300 (USB serial port, sound card, CI-V rate and address) and
+print its settings and what the set-up would change. Reads only.
+.TP
+.B \-\-backup\-ic7300\-settings
+Save the radio's settings to ~/.config/signum/ic7300-backup-SERIAL-TIME.conf.
+Changes nothing.
+.TP
+.B \-\-configure\-my\-ic7300\-and\-overwrite\-its\-settings
+RECONFIGURE the radio for Signum over CI-V (Connectors menu, USB-D, 3.0 kHz
+filter, AGC MID, NB/NR/notch/COMP/VOX/split/RIT/XIT off, USB SEND = RTS),
+each setting read back, after a backup of its settings and your typed YES;
+then write alsa, ptt, tx-gain, prime-ms and no-autocal into the settings file.
+.TP
+.B \-\-configure\-my\-ic7300\-for\-an\-external\-modem\-and\-overwrite\-its\-settings
+The same, for a hardware modem on the radio's ACC socket instead of Signum on
+USB: DATA MOD = ACC, USB SEND and USB Keying (CW, RTTY) OFF (nothing on USB can
+key the radio), the rest as for Signum, so either command brings the radio
+back from the other. Does not write the settings file; Signum cannot key the
+radio until the Signum set-up is run again.
+.TP
+.BI \-\-restore\-ic7300\-settings " FILE"
+Write such a backup back to its radio, each setting read back, after your
+typed YES.
+.TP
+.BI \-\-ic7300\-serial " N"
+Which radio, when more than one is plugged in.
+.TP
+.B \-\-i\-understand\-this\-overwrites\-my\-ic7300\-settings
+For scripts: confirm the set-up or restore without typing YES.
+.SH FILES
+.TP
+.I ~/.config/signum/signum.conf
+Settings read at start (see \-\-config); written 0600 by the GUI.
+.TP
+.I ~/.config/signum/ic7300-backup-SERIAL-TIME.conf
+An IC-7300's settings saved by the set-up (or \-\-backup\-ic7300\-settings);
+\-\-restore\-ic7300\-settings writes them back.
+.TP
+.I ~/.config/signum/keys/
+Encryption keys: station.key (the private key, 0600), peers, psk, received.
+.TP
+.I ~/.config/signum/calibration.conf
+Timing calibration; a commented sample is in the system configuration
+directory (signum/calibration.conf).
+.TP
+.I share/signum/www, share/signum/tui
+The GUI and the terminal front panel.
+.SH NOTES
+Real-time scheduling needs
+.B setcap cap_sys_nice,cap_ipc_lock+ep
+on the binary; \fBmake\fR and \fBmake install\fR set it (\fBcap_sys_nice,cap_ipc_lock+ep\fR) when run as root or with password-less sudo, \fBmake rt\fR otherwise.
+.PP
+\fBCPU health.\fR Signum tells when this computer is not keeping up with the audio and the
+decodes (information only; \fBCPUadapt\fR is the one control). The state is
+\fBOK\fR, \fBBUSY\fR or \fBSTARVED\fR, from playback underruns and capture
+stalls, late or thin decodes, computer back-off steps, SL1 rescues and late
+transmit audio in the last minute (start-up hiccups are ignored; it does not
+flap). It shows as a lamp on the GUI panel (reason in its tooltip), on the
+TUI's top line, as the console command \fBCPULoad\fR, as the \fBcpu\fR field
+of the WebSocket panel message, and as a \fB[cpu]\fR log line on every change
+that says what is late, which of no real-time priority, a CPU clock that
+cannot be held up and other load apply here, and what to do: stop other
+programs, \fBmake rt\fR, the signum-cpufreq.service unit, or a faster
+computer. Only with \-\-alsa.
+.SH COPYRIGHT
+Copyright (C) 2026 Jeff Francis, N0GQ.
+Signum is licensed under the GNU GPL version 3 or later
+(GPL-3.0-or-later, <https://www.gnu.org/licenses/gpl-3.0.html>).
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+It uses ALSA's libasound (LGPL-2.1-or-later), dynamically linked.
+.SH SEE ALSO
+README.md and the user guide in docs/ (docs/md/README.md) in the source tree;
+the licence text is the file COPYING.

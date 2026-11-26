@@ -1,0 +1,2080 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Copyright (C) 2026 Jeff Francis, N0GQ -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signum</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<!--
+  Signum's browser GUI, served by the program on its WebSocket port
+  (http://127.0.0.1:8770/). It shows what this program has: the front panel, the
+  link, the receive waterfall, the station parameters, a terminal on the host-mode
+  interpreter, the log. Data from the WebSocket (src/web/README.md).
+  Self-contained: no external files, works offline.
+-->
+<style>
+:root {
+  --bg: #0d1014;
+  --bg2: #141a20;
+  --card: rgba(255,255,255,0.035);
+  --card-edge: rgba(255,255,255,0.08);
+  --text: #dfe6ee;
+  --dim: #7d8b99;
+  --faint: #4a5562;
+  --green: #35f06a;
+  --red: #ff3b30;
+  --amber: #ffbe2e;
+  --blue: #4aa8ff;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", "DejaVu Sans Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: radial-gradient(1200px 700px at 30% -10%, #1c2530 0%, var(--bg) 60%) fixed var(--bg); color: var(--text); font-family: var(--sans); }
+body { min-height: 100vh; padding: 18px 20px 28px; }
+.top { display: flex; align-items: center; gap: 14px; margin: 0 auto 14px; max-width: 1180px; }
+.top h1 { font-size: 15px; font-weight: 600; letter-spacing: .06em; margin: 0; color: #c9d4df; text-transform: uppercase; }
+.top h1 .by { text-transform: none; font-weight: 400; letter-spacing: .02em; color: #8fa0b1; }   /* "by N0GQ" as written */
+.top .sp { flex: 1; }
+.pill { font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--card-edge); color: var(--dim); background: rgba(255,255,255,0.03); white-space: nowrap; }
+.pill { font-variant-numeric: tabular-nums; }
+#clock { display: inline-block; min-width: 11ch; text-align: right; box-sizing: content-box; }
+#conn { display: inline-block; min-width: 23ch; text-align: center; }
+.cputemp { flex: none; }
+.pill.ok { color: #9ff5b9; border-color: rgba(53,240,106,.35); background: rgba(53,240,106,.07); }
+.pill.bad { color: #ffb3ad; border-color: rgba(255,59,48,.35); background: rgba(255,59,48,.07); }
+.pill.modem { color: #cfe3ff; border-color: rgba(74,168,255,.35); background: rgba(74,168,255,.08); }
+.pill.warn { color: #ffe08a; border-color: rgba(255,190,46,.4); background: rgba(255,190,46,.08); }
+.wrap { max-width: 1180px; margin: 0 auto; }
+/* ---- the front panel: anodised plate (owner, 2026-11-12: a fixed hardware panel; every lamp
+   always there with a fixed engraved label, only lamps light; values only in display windows) ---- */
+.panel {
+  position: relative; border-radius: 14px; padding: 26px 30px 34px;
+  background:
+    repeating-linear-gradient(90deg, rgba(255,255,255,0.018) 0 1px, rgba(0,0,0,0.018) 1px 3px),
+    linear-gradient(180deg, #2b323a 0%, #1d2228 46%, #171b20 100%);
+  box-shadow: 0 1px 0 rgba(255,255,255,.12) inset, 0 -1px 0 rgba(0,0,0,.6) inset, 0 18px 40px rgba(0,0,0,.55), 0 2px 6px rgba(0,0,0,.5);
+  display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr); gap: 20px 30px; align-items: start;
+}
+.prow { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 16px 26px; align-items: flex-end; padding-top: 16px;
+  border-top: 1px solid rgba(0,0,0,.45); box-shadow: 0 -1px 0 rgba(255,255,255,.05); }
+.screw { position: absolute; width: 12px; height: 12px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #c9ced4 0%, #8a9198 40%, #4a5057 75%, #2e3338 100%);
+  box-shadow: 0 1px 1px rgba(0,0,0,.7), 0 0 0 1px rgba(0,0,0,.35); }
+.screw::after { content: ""; position: absolute; left: 2px; right: 2px; top: 5px; height: 2px; background: rgba(30,34,38,.85); border-radius: 1px; transform: rotate(var(--r, 25deg)); }
+.screw.tl { left: 10px; top: 10px; } .screw.tr { right: 10px; top: 10px; --r: -40deg; }
+.screw.bl { left: 10px; bottom: 10px; --r: 70deg; } .screw.br { right: 10px; bottom: 10px; --r: 10deg; }
+.brand { position: absolute; left: 32px; bottom: 9px; font-size: 10px; letter-spacing: .32em; color: rgba(220,228,236,.42); text-transform: uppercase; }
+.brand b { color: rgba(220,228,236,.7); font-weight: 600; }
+.notaffil { margin: 10px 0 12px; padding: 10px 14px; border: 2px solid #ff8a80; border-radius: 8px; background: rgba(255,82,82,.12); color: #ffd6d2; font-weight: 700; font-size: 14px; line-height: 1.4; }
+.brand .mk { text-transform: none; letter-spacing: .12em; font-size: 11px; font-weight: 600; color: rgba(220,228,236,.72); }
+/* engraved captions (silk-screened, fixed) */
+.cap { font-size: 9px; letter-spacing: .24em; color: rgba(220,228,236,.5); text-transform: uppercase; text-align: center; margin-top: 7px; white-space: nowrap;
+  text-shadow: 0 -1px 0 rgba(0,0,0,.6); }
+
+/* dot-matrix window: two lines */
+.display { padding: 12px 14px; border-radius: 6px;
+  background: linear-gradient(180deg, #050806 0%, #0b120d 100%);
+  box-shadow: 0 0 0 2px #0a0c0e, 0 0 0 3px rgba(255,255,255,.07), inset 0 2px 10px rgba(0,0,0,.9);
+  position: relative; }
+.display::after { content: ""; position: absolute; inset: 0; border-radius: 6px; pointer-events: none;
+  background: linear-gradient(160deg, rgba(255,255,255,.10) 0%, rgba(255,255,255,0) 38%, rgba(255,255,255,0) 100%); }
+.display canvas { display: block; width: 100%; height: auto; }
+
+/* seven-segment readouts, each in its own window with a fixed caption */
+.lampblk { display: flex; flex-wrap: wrap; gap: 14px 20px; align-content: flex-start; justify-content: flex-end; min-width: 0; }
+.readouts { justify-content: space-between; gap: 14px 12px; align-items: flex-start; }
+.ro { display: flex; flex-direction: column; align-items: stretch; }
+.segwin { padding: 7px 7px; border-radius: 5px; background: linear-gradient(180deg, #120404 0%, #1a0706 100%);
+  box-shadow: 0 0 0 2px #0a0c0e, 0 0 0 3px rgba(255,255,255,.07), inset 0 2px 8px rgba(0,0,0,.9); position: relative; }
+.segwin::after { content: ""; position: absolute; inset: 0; border-radius: 5px; pointer-events: none;
+  background: linear-gradient(165deg, rgba(255,255,255,.08) 0%, rgba(255,255,255,0) 40%); }
+.segwin svg { display: block; height: 27px; width: auto; }
+
+/* bicolour LEDs with a two-line engraved label (green name over red name), as the original */
+.lamps { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; }
+.lc { display: flex; align-items: center; gap: 9px; }
+.led { --c: #283028; --g: transparent; flex: none; width: 17px; height: 17px; border-radius: 50%; position: relative;
+  background: radial-gradient(circle at 50% 60%, var(--c) 0%, color-mix(in srgb, var(--c) 55%, #000) 70%, color-mix(in srgb, var(--c) 25%, #000) 100%);
+  box-shadow: 0 0 0 2px #0b0d0f, 0 0 0 3px rgba(255,255,255,.08), 0 1px 2px 3px rgba(0,0,0,.45), 0 0 14px 3px var(--g); transition: background .08s, box-shadow .08s; }
+.led::before { content: ""; position: absolute; left: 22%; top: 12%; width: 44%; height: 34%; border-radius: 50%;
+  background: radial-gradient(ellipse at 50% 40%, rgba(255,255,255,.85) 0%, rgba(255,255,255,.25) 45%, rgba(255,255,255,0) 75%); }
+.led::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: radial-gradient(circle at 50% 50%, rgba(255,255,255,.0) 55%, rgba(0,0,0,.35) 100%); }
+.led.green { --c: #3dff74; --g: rgba(61,255,116,.55); }
+.led.red { --c: #ff3d33; --g: rgba(255,61,51,.55); }
+.led.yellow { --c: #ffd23a; --g: rgba(255,210,58,.55); }
+.led.sm { width: 13px; height: 13px; }
+.lt { font-size: 10.5px; line-height: 1.2; letter-spacing: .05em; color: rgba(225,232,240,.8); text-transform: uppercase; white-space: nowrap; }
+.lt .g { color: #8fe9a8; display: block; } .lt .r { color: #ff9a92; display: block; } .lt .y { color: #ffe08a; display: block; }
+.lgrp { display: flex; flex-direction: column; align-items: center; }
+/* the computer lamp (CPU health): green OK, yellow busy, red starved */
+#cpugrp { cursor: help; } #cpugrp:focus-visible { outline: 2px solid rgba(74,168,255,.6); outline-offset: 4px; border-radius: 6px; }
+/* it sits in the top bar beside the CPU temperature (2026-11-14: in the lamp block it pushed the Link lamps
+   to a row of their own and made the panel taller); the reason shows beside the lamp while busy or starved */
+/* the reason and the advice are not on the panel (owner, 2026-11-14: it models a real front panel, where text
+   does not appear and disappear): they are in the lamp's tooltip and the Status tab's Computer card; the
+   caption has a fixed width so the top bar does not move when it reads "CPU busy" */
+#cpucap { display: inline-block; min-width: 10.5em; text-align: left; }
+.led.blink { animation: cpublink 1.1s steps(1, end) infinite; }
+@keyframes cpublink { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .led.blink { animation: none; } }
+/* lamps with a tooltip: hover shows it; a tap (phones have no hover), a click or Enter shows it in a box under
+   the lamp (position: fixed, over the page: nothing on the panel moves) */
+[data-tip] { cursor: help; } .lc[data-tip]:focus-visible { outline: 2px solid rgba(74,168,255,.6); outline-offset: 3px; border-radius: 4px; }
+.tipbox { position: fixed; z-index: 50; max-width: min(420px, calc(100vw - 32px)); padding: 9px 12px; border-radius: 7px; font-size: 13px; line-height: 1.4;
+  background: #1b2128; color: #e6edf3; border: 1px solid rgba(255,255,255,.18); box-shadow: 0 8px 24px rgba(0,0,0,.55); white-space: pre-line; }
+.tipbox[hidden] { display: none; }
+.lgrp > .lamps { padding: 10px 14px 8px; border: 1px solid rgba(0,0,0,.5); border-radius: 6px; box-shadow: 0 1px 0 rgba(255,255,255,.05), inset 0 1px 0 rgba(255,255,255,.03); min-height: 54px; }
+/* the Crypto lamps sit under the Display (owner, 2026-11-16), in the display's column, not in the lamp block */
+/* one compact row (caption at its left, no bezel) so the column is no taller than the lamp block beside it */
+#crgrp { margin-top: 4px; flex-direction: row; justify-content: center; gap: 14px; }
+#crgrp > .lamps { padding: 0; border: 0; box-shadow: none; min-height: 0; justify-content: center; gap: 8px 16px; }
+#crgrp > .cap { margin-top: 0; order: -1; }
+/* a phone (single column): tighter gaps so the four lamps and the caption stay one row down to 360 px
+   (the Verified lamp's amber label reads UNVERIFIED in full) */
+@media (max-width: 460px) { #crgrp { gap: 6px; } #crgrp > .lamps { gap: 6px 7px; flex-wrap: nowrap; } #crgrp .lt { letter-spacing: .02em; } }
+/* the Peer lamps (Signum / Other, TODO t) sit between the Link time row and the Tuning display, just above the
+   tuning bar (owner, 2026-11-16; the panel must not get taller at any width): positioned in the free space over the
+   tuning column, so they take no space of their own and the panel's layout is the same with or without them */
+#tunecol { position: relative; }
+#peergrp { position: absolute; left: 0; bottom: 100%; margin-bottom: 4px; display: flex; align-items: center; gap: 12px; white-space: nowrap; }
+#peergrp .pcap { font-size: 9px; letter-spacing: .24em; text-transform: uppercase; color: rgba(220,228,236,.5); text-shadow: 0 -1px 0 rgba(0,0,0,.6); }
+#peergrp .lc { gap: 6px; } #peergrp .led { width: 12px; height: 12px; }
+#peergrp .lc[data-tip]:focus-visible { outline-offset: 2px; }
+/* mode and speed level: a column per lamp, the label under it; two rows of lamps, TX over RX (owner, 2026-11-22),
+   in the height the group's box already had (min-height 54px): the mode lamp sits once, between the rows */
+#mlamps { padding: 6px 8px 5px; gap: 12px 5px; }
+/* the receive audio level (owner, 2026-11-22): three small lamps stacked in a box as tall as the mode group's,
+   beside it (the space left of the mode group); Low amber, OK green, High amber / Clip red */
+#aulamps { padding: 6px 9px 5px; flex-direction: column; align-items: flex-start; gap: 2px; flex-wrap: nowrap; }
+#aulamps .lc { gap: 6px; } #aulamps .lt { font-size: 9px; line-height: 13px; letter-spacing: .04em; }
+#aulamps .lt .g, #aulamps .lt .r, #aulamps .lt .y { display: inline; }
+/* the third row (owner, 2026-11-22): the far-end lamps over the tuning bar, the S/N and the radio's frequency beside
+   it, all in the height the Disconnect button already gave the row */
+#row3 { align-items: flex-end; }
+#infocol { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.fargrp { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.fargrp .pcap { font-size: 9px; letter-spacing: .24em; text-transform: uppercase; color: rgba(220,228,236,.5); text-shadow: 0 -1px 0 rgba(0,0,0,.6); }
+.fargrp .lc { gap: 6px; } .fargrp .led { width: 12px; height: 12px; }
+.fargrp .lt .g, .fargrp .lt .r, .fargrp .lt .y { display: inline; }
+/* the copy in the lamp block (one-column panel): a box as tall as the mode group's, two lines of lamps */
+.lgrp > .farbox { width: 192px; padding: 6px 9px 5px; align-content: center; gap: 4px 12px; }
+.farbox .lt { font-size: 9.5px; letter-spacing: .04em; }
+#inforow { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 22px 16px; }
+#row3 .clocks { margin-left: auto; }
+/* the S/N and the frequency: beside the tuning bar in the two-column panel; in the readouts row in the one-column
+   panel (1100 px and under), where that row has room and the tuning row does not (one copy shown, both kept live) */
+.ro-narrow { display: none; }
+.mgrp { display: flex; align-items: flex-end; gap: 6px; }
+.mcol { display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 15px; }
+.mstk { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; height: 28px; }
+.mrow .mstk { align-items: flex-end; justify-content: space-between; padding: 0; }
+.mrow .mstk span { font-size: 9px; line-height: 13px; letter-spacing: .12em; color: rgba(220,228,236,.55); }
+.mcol.ls .lt .g, .mcol.ls .lt .r { display: inline; }
+.mline { display: contents; } .mlab2 { display: none; }
+.mcol .lt { font-size: 10px; letter-spacing: .02em; }
+.mcol.mode .lt { font-weight: 700; color: #8fe9a8; }
+.msep { width: 1px; align-self: stretch; background: rgba(0,0,0,.45); box-shadow: 1px 0 0 rgba(255,255,255,.05); margin: 0 2px; }
+/* tuning row */
+.tuning { display: flex; gap: 4px; align-items: center; height: 17px; }
+.tuning .seg { width: 15px; height: 9px; border-radius: 2px; background: #2a1312;
+  box-shadow: 0 0 0 1px #0b0d0f, inset 0 1px 0 rgba(255,255,255,.06); }
+.tuning .seg.mid { background: #10261a; }
+.tuning .seg.on { background: linear-gradient(180deg, #ff8a80, #ff3b30 60%, #c2271f); box-shadow: 0 0 0 1px #0b0d0f, 0 0 9px 1px rgba(255,59,48,.6); }
+.tuning .seg.on.g { background: linear-gradient(180deg, #a6ffbf, #35f06a 60%, #1fa64a); box-shadow: 0 0 0 1px #0b0d0f, 0 0 9px 1px rgba(53,240,106,.6); }
+.tlabel { font-size: 9px; letter-spacing: .25em; color: rgba(220,228,236,.5); text-transform: uppercase; display: flex; justify-content: space-between; margin-top: 7px; }
+/* the CPU temperature, at the top: two readouts with engraved units and a lamp (amber 70 °C, red 80 °C) */
+.cputemp { display: flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 8px;
+  background: linear-gradient(180deg, #232a31, #1a1f25); box-shadow: 0 0 0 1px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.07); }
+.cputemp .cap { margin: 0 6px 0 0; }
+.cputemp .segwin { padding: 4px 6px; } .cputemp .segwin svg { height: 18px; }
+.clocks { display: flex; flex-wrap: wrap; gap: 14px 20px; align-items: flex-end; }
+.clocks .segwin svg { height: 27px; }
+.cputemp .unit { font-size: 11px; color: rgba(220,228,236,.6); margin-right: 6px; }
+
+/* the DISCONNECT push-button: a moulded cap in a recessed bezel, an LED in the cap (lit while a
+   disconnect is in progress); the only visual change is the physical press */
+.pbwrap { display: flex; flex-direction: column; align-items: center; }
+.pbbezel { padding: 6px; border-radius: 12px; background: linear-gradient(180deg, #0c0e10, #1b1f24);
+  box-shadow: inset 0 2px 5px rgba(0,0,0,.9), inset 0 -1px 0 rgba(255,255,255,.07), 0 1px 0 rgba(255,255,255,.08); }
+.pb { -webkit-appearance: none; appearance: none; border: 0; margin: 0; cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+  position: relative; display: flex; align-items: center; justify-content: center; gap: 10px;
+  width: 168px; height: 58px; border-radius: 8px; padding: 0 14px 0 12px; user-select: none; -webkit-user-select: none;
+  font: 700 12px var(--sans); letter-spacing: .2em; color: #2a2d31; text-transform: uppercase;
+  text-shadow: 0 1px 0 rgba(255,255,255,.55), 0 -1px 0 rgba(0,0,0,.25);
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgba(255,255,255,.55) 0%, rgba(255,255,255,0) 55%),
+    repeating-linear-gradient(90deg, rgba(0,0,0,.025) 0 1px, rgba(255,255,255,.02) 1px 2px),
+    linear-gradient(180deg, #e3e6e9 0%, #c3c8cd 45%, #a5abb2 100%);
+  box-shadow: 0 0 0 1px #4b5057, inset 0 1px 0 rgba(255,255,255,.9), inset 0 -3px 0 rgba(0,0,0,.18), inset 0 0 0 2px rgba(255,255,255,.12),
+    0 5px 0 #6d737a, 0 6px 0 #3b3f44, 0 9px 10px rgba(0,0,0,.6);
+  transform: translateY(-4px); transition: transform .05s, box-shadow .05s; }
+.pb:focus { outline: none; } .pb:focus-visible { outline: 2px solid rgba(74,168,255,.6); outline-offset: 4px; }
+.pb.down, .pb:active { transform: translateY(1px);
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgba(255,255,255,.35) 0%, rgba(255,255,255,0) 55%),
+    repeating-linear-gradient(90deg, rgba(0,0,0,.025) 0 1px, rgba(255,255,255,.02) 1px 2px),
+    linear-gradient(180deg, #cdd1d5 0%, #b2b8be 50%, #969ca3 100%);
+  box-shadow: 0 0 0 1px #4b5057, inset 0 2px 3px rgba(0,0,0,.25), inset 0 -1px 0 rgba(255,255,255,.3), 0 0 0 #6d737a, 0 1px 0 #3b3f44, 0 1px 2px rgba(0,0,0,.6); }
+.pb .led { width: 13px; height: 13px; box-shadow: 0 0 0 2px #5a5f66, 0 0 0 3px rgba(255,255,255,.35), 0 0 12px 3px var(--g); }
+.pb .led:not(.yellow) { --c: #3a3520; }
+
+/* a narrow two-column panel (1101-1260 px): a smaller display, so the lamp block keeps its two rows and the tuning
+   row its one line */
+@media (min-width: 1101px) and (max-width: 1260px) { #dm { max-width: 420px !important; } #inforow { column-gap: 12px; } #row3 { column-gap: 18px; } .clocks { column-gap: 14px; } }
+@media (max-width: 1100px) { .top { flex-wrap: wrap; row-gap: 8px; } .panel { grid-template-columns: 1fr; } .lampblk { justify-content: flex-start; } .readouts { justify-content: flex-start; } #row3 .clocks { margin-left: 0; }
+  .ro-narrow { display: flex; } #snr_ro, #khz_ro, #fargrp { display: none; } }
+@media (max-width: 560px) { body { padding: 12px 16px 24px; } .panel { padding: 22px 14px 34px; gap: 16px; } .prow { gap: 14px 14px; }
+  .clocks { gap: 10px 14px; } .clocks .segwin svg { height: 22px; }
+  .readouts { gap: 10px 10px; } .segwin svg { height: 22px; } .segwin { padding: 5px 6px; }
+  .lt { font-size: 9px; } .lc { gap: 7px; } .led { width: 14px; height: 14px; } .mgrp { gap: 6px; } .tuning .seg { width: 12px; }
+  .lgrp > .lamps { padding: 8px 10px 6px; gap: 10px 14px; } .top h1 { font-size: 13px; }
+  .top { flex-wrap: wrap; gap: 8px 10px; } .tabs { flex-wrap: wrap; } .tab { padding: 10px 10px; } #mlamps { flex-direction: column; align-items: flex-start; flex-wrap: nowrap; gap: 8px; } .mline { display: flex; align-items: flex-end; gap: 10px; } .msep { display: none; } .mlab2 { display: flex; } .lgrp { align-items: stretch; }
+  #tunecol { order: 2; } .lgrp > .farbox { width: auto; } .lampblk > .lgrp:nth-child(5) { order: 3; } #farlg2 { order: 4; } }
+/* a phone too narrow for Channel and Link on one row: the RX audio lamps beside the Channel lamp instead */
+@media (max-width: 440px) { #augrp { order: 1; } .lampblk > .lgrp:nth-child(2) { order: 2; } }
+
+/* ---- cards ---- */
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 10px; margin-top: 12px; }
+.card { background: var(--card); border: 1px solid var(--card-edge); border-radius: 12px; padding: 11px 14px 9px; backdrop-filter: blur(6px); min-width: 0; }
+/* the MODEM settings: one line across the top of the cards (vertical space matters: user, 2026-10-30) */
+.mstrip { grid-column: 1 / -1; order: -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; padding: 6px 14px;
+  background: var(--card); border: 1px solid var(--card-edge); border-radius: 10px; font-size: 12.5px; }
+.mstrip .k { color: var(--dim); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; margin-right: 6px; }
+.mstrip > div { display: flex; align-items: center; flex-wrap: wrap; gap: 3px; }
+.mstrip .step { padding: 2px 6px; font-size: 10.5px; }
+/* a modem's own settings (modem_settings.hpp): compact on Status, all on Configure */
+.msrow { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 6px 8px; align-items: center; font-size: 12.5px; }
+.msrow .k { color: var(--dim); }
+.ms-seg { display: inline-flex; flex-wrap: wrap; gap: 3px; }
+.ms-seg button { font: 600 11px var(--mono); padding: 3px 7px; border-radius: 5px; cursor: pointer; color: var(--dim); background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08); }
+.ms-seg button.on { color: #04210f; background: linear-gradient(180deg, #8dffaf, #33dc66); border-color: transparent; }
+.ms-in { width: 74px; padding: 3px 6px; font: 12px var(--mono); }
+.ms-sel { padding: 3px 4px; font: 12px var(--mono); max-width: 100%; }
+.ms-note { font-size: 11.5px; color: #ff8a80; min-height: 0; }
+.ms-tune { font: 600 11px var(--mono); padding: 3px 9px; border-radius: 5px; cursor: pointer; color: #2b1d00; background: linear-gradient(180deg, #ffd98a, #f0b429); border: 0; }
+.card h2 { margin: 0 0 8px; font-size: 11px; letter-spacing: .18em; font-weight: 600; color: var(--dim); text-transform: uppercase; display: flex; justify-content: space-between; }
+.kv { display: grid; grid-template-columns: 112px 1fr; row-gap: 6px; column-gap: 10px; font-size: 13px; }
+.kv .k { color: var(--dim); }
+.kv .v { font-family: var(--mono); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.big { font: 600 30px var(--mono); letter-spacing: -.01em; }
+.big small { font-size: 13px; color: var(--dim); font-weight: 500; margin-left: 4px; }
+.state { display: inline-block; padding: 2px 9px; border-radius: 999px; font: 600 11px var(--sans); letter-spacing: .08em; text-transform: uppercase; }
+.state.connected { background: rgba(53,240,106,.14); color: #9ff5b9; }
+.state.calling, .state.closing { background: rgba(255,190,46,.14); color: #ffd98a; }
+.state.standby, .state.none { background: rgba(255,255,255,.06); color: var(--dim); }
+.ladder { display: flex; gap: 4px; flex-wrap: wrap; margin: 2px 0 10px; }
+.step { font: 600 11px var(--mono); padding: 5px 8px; border-radius: 5px; color: var(--faint); background: rgba(255,255,255,.035); border: 1px solid rgba(255,255,255,.05); }
+.step.on { color: #04210f; background: linear-gradient(180deg, #8dffaf, #33dc66); border-color: transparent; box-shadow: 0 0 12px rgba(53,240,106,.35); }
+.rigf { font: 600 28px var(--mono); color: #cfe3ff; letter-spacing: .02em; margin: 2px 0 10px; } .rigf small { font-size: 13px; color: var(--dim); }
+.smeter { display: flex; gap: 3px; margin-top: 10px; }
+.smeter .mseg { flex: 1; height: 8px; border-radius: 2px; background: #10261a; box-shadow: 0 0 0 1px #0b0d0f; }
+.smeter .mseg.on { background: linear-gradient(180deg, #a6ffbf, #35f06a 60%, #1fa64a); box-shadow: 0 0 0 1px #0b0d0f, 0 0 7px rgba(53,240,106,.5); }
+.smeter .mseg.on.r { background: linear-gradient(180deg, #ff8a80, #ff3b30 60%, #c2271f); box-shadow: 0 0 0 1px #0b0d0f, 0 0 7px rgba(255,59,48,.5); }
+.display.offs { padding: 8px 10px; margin-top: 4px; }
+.lamprow { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--dim); align-items: center; }
+.lamprow span { display: flex; align-items: center; gap: 7px; }
+.muted { color: var(--faint); }
+table.pk { width: 100%; border-collapse: collapse; font: 12px var(--mono); }
+table.pk td, table.pk th { padding: 4px 6px; text-align: left; border-bottom: 1px solid rgba(255,255,255,.05); }
+table.pk th { color: var(--dim); font: 600 10px var(--sans); letter-spacing: .12em; text-transform: uppercase; }
+.linkswrap { overflow-x: auto; max-height: 360px; overflow-y: auto; padding: 4px 0; }
+.linkswrap table.pk td { white-space: nowrap; }
+
+/* ---- text and command ---- */
+.term { margin-top: 16px; }
+.term pre { margin: 0; height: 190px; overflow: auto; background: rgba(0,0,0,.35); border: 1px solid var(--card-edge); border-radius: 10px; padding: 10px 12px;
+  font: 12.5px/1.45 var(--mono); color: #cde7d4; white-space: pre-wrap; word-break: break-all; }
+.term pre .ev { color: #8fb4ff; } .term pre .me { color: #ffd98a; } .term pre .res { color: #9aa6b2; }
+.term pre .mon { color: #c9a8ff; } .term pre .mon b { color: #e2d2ff; font-weight: 600; }
+.cmd { display: flex; gap: 8px; margin-top: 8px; }
+.cmd select, .cmd input, .cmd button { font: 13px var(--mono); color: var(--text); background: rgba(255,255,255,.05); border: 1px solid var(--card-edge); border-radius: 8px; padding: 8px 10px; }
+.cmd input { flex: 1; min-width: 0; }
+.cmd button { cursor: pointer; } .cmd button:hover { background: rgba(255,255,255,.09); }
+
+/* ---- waterfall (the receive audio) ---- */
+.wfwrap { position: relative; margin-top: 10px; border: 1px solid var(--card-edge); border-radius: 10px; overflow: hidden; background: #05080c; }
+#wfc { display: block; width: 100%; height: 180px; cursor: crosshair; }
+#wfs { display: block; width: 100%; height: 20px; background: rgba(0,0,0,.45); }
+.wfctl { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin-top: 8px; font: 12px var(--mono); color: var(--dim); }
+.wfctl select, .wfctl input[type=range] { font: 12px var(--mono); color: var(--text); background: rgba(255,255,255,.05); border: 1px solid var(--card-edge); border-radius: 6px; padding: 3px 6px; }
+.wfctl input[type=range] { width: 110px; padding: 0; accent-color: var(--blue); }
+#wf_info { margin-left: auto; color: var(--text); }
+details summary { cursor: pointer; color: var(--dim); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; list-style: none; }
+details summary::-webkit-details-marker { display: none; }
+details summary::before { content: "▸ "; } details[open] summary::before { content: "▾ "; }
+
+/* ---- tabs ---- */
+.tabs { display: flex; gap: 4px; margin: 18px 0 0; border-bottom: 1px solid var(--card-edge); }
+.tab { font: 600 12px var(--sans); letter-spacing: .14em; text-transform: uppercase; color: var(--dim); background: none; border: 0; padding: 10px 16px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tab:hover { color: var(--text); }
+.tab.on { color: #cfe3ff; border-bottom-color: var(--blue); }
+.pane { display: none; } .pane.on { display: block; }
+/* ---- configuration ---- */
+.cfggrid { grid-template-columns: repeat(auto-fit, minmax(min(400px, 100%), 1fr)); }
+.form .form { gap: 12px 14px; }
+.form .now { color: var(--faint); font-size: 11.5px; }
+.cfgbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 16px 0 4px; }
+.cfgbar .lbl { color: var(--dim); font-size: 12px; letter-spacing: .1em; text-transform: uppercase; }
+.cfgbar .active { font: 600 14px var(--mono); color: #cfe3ff; padding: 6px 12px; border-radius: 8px; background: rgba(74,168,255,.1); border: 1px solid rgba(74,168,255,.3); }
+.btn, .in, .sel { font: 13px var(--mono); color: var(--text); background: rgba(255,255,255,.05); border: 1px solid var(--card-edge); border-radius: 8px; padding: 8px 11px; }
+.btn { cursor: pointer; } .btn:hover { background: rgba(255,255,255,.1); }
+.btn.primary { background: linear-gradient(180deg, #3f8fe0, #2c6fb6); border-color: transparent; color: #fff; }
+.btn.danger:hover { background: rgba(255,59,48,.18); border-color: rgba(255,59,48,.4); }
+.in:focus, .sel:focus { outline: none; border-color: rgba(74,168,255,.6); box-shadow: 0 0 0 3px rgba(74,168,255,.15); }
+.form { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 12px 14px; align-items: center; font-size: 13px; }
+.form .k { color: var(--dim); }
+.form .hint { grid-column: 2; color: var(--faint); font-size: 11.5px; margin-top: -6px; }
+@media (max-width: 560px) { .form { grid-template-columns: minmax(0, 1fr); gap: 6px 10px; } .form .hint { grid-column: 1; margin: 0 0 8px; } }
+.seg { justify-self: start; display: inline-flex; border: 1px solid var(--card-edge); border-radius: 8px; overflow: hidden; }
+.seg button { font: 600 12px var(--mono); color: var(--dim); background: rgba(255,255,255,.03); border: 0; padding: 8px 13px; cursor: pointer; border-right: 1px solid var(--card-edge); }
+.seg button:last-child { border-right: 0; }
+.seg button:disabled { opacity: .35; cursor: not-allowed; }
+.kv .v.wrap { white-space: normal; overflow: visible; }
+button.step { cursor: pointer; } button.step:disabled { cursor: not-allowed; opacity: .4; }
+/* Modems cards (user 2026-10-21): selected green, available but not selected red, not running grey */
+.step.no { color: #2b0503; background: linear-gradient(180deg, #ff8a80, #ff3b30 60%, #c2271f); border-color: transparent; }
+.seg.modems { flex-wrap: wrap; max-width: 100%; }
+.seg.modems button:not(.on):not(:disabled) { color: #2b0503; background: linear-gradient(180deg, #ff8a80, #ff3b30 60%, #c2271f); }
+.seg button.on { color: #04210f; background: linear-gradient(180deg, #8dffaf, #33dc66); }
+.saved { font-size: 12px; color: var(--faint); }
+.saved.flash { color: #9ff5b9; }
+.running { font: 11.5px var(--mono); color: var(--faint); grid-column: 2; margin-top: -6px; }
+/* ---- terminal ---- */
+.tty { height: 420px; overflow: auto; background: #06090b; border: 1px solid var(--card-edge); border-radius: 10px; padding: 12px 14px; margin-top: 16px;
+  font: 13.5px/1.45 var(--mono); color: #b9f5c8; white-space: pre-wrap; word-break: break-all; outline: none; box-shadow: inset 0 2px 12px rgba(0,0,0,.6); cursor: text; }
+.tty:focus { border-color: rgba(53,240,106,.35); }
+.tty .cur { display: inline-block; width: .6em; background: #6dff95; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { background: transparent; } }
+.ttykeys { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+/* ---- login ---- */
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none; align-items: center; justify-content: center; z-index: 10; }
+.modal.on { display: flex; }
+.modal .box { background: #141a20; border: 1px solid var(--card-edge); border-radius: 14px; padding: 22px; width: min(360px, 92vw); display: grid; gap: 12px; }
+.modal h3 { margin: 0; font-size: 15px; }
+.modal .box.about { width: min(760px, 94vw); max-height: 88vh; overflow: auto; }
+.modal h4 { margin: 4px 0 0; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
+.abt td { white-space: normal; font-size: 12.5px; vertical-align: top; } .abt a { color: #8cc4ff; }
+/* ---- the IC-7300 set-up dialog ---- */
+.modal .box.rig { width: min(880px, 96vw); max-height: 92vh; overflow: auto; }
+.rigwarn { border: 2px solid var(--red); border-radius: 10px; padding: 10px 12px; color: #ffd0cc; background: rgba(255,59,48,.10); font-size: 13px; white-space: pre-wrap; }
+.rigwarn b { color: #fff; }
+.rigsteps { font: 12px/1.5 var(--mono); max-height: 240px; overflow: auto; white-space: pre-wrap; }
+.rigsteps .ok { color: #9ff5b9; } .rigsteps .bad { color: #ff8a80; } .rigsteps .info { color: var(--dim); }
+.rigtab td.chg { color: #ffd479; }
+.rigbtns { display: flex; gap: 8px; flex-wrap: wrap; }
+.btn.danger.go { border-color: rgba(255,59,48,.55); color: #ffb3ad; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.abl { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--text); line-height: 1.5; }
+/* ---- encryption (docs/md/encryption.md); every part hidden in a build without encryption (hello.crypto false) ---- */
+body:not(.crypto) .crypto-only { display: none !important; }
+.crwarn { padding: 9px 12px; border: 2px solid #ff8a80; border-radius: 8px; background: rgba(255,82,82,.12); color: #ffd6d2; font-size: 12.5px; line-height: 1.45; margin-bottom: 8px; }
+.crwarn b { color: #fff; }
+.crwarn.amber { border-color: rgba(255,190,46,.7); background: rgba(255,190,46,.09); color: #ffe7b0; }
+.crnote { font-size: 12px; color: var(--dim); line-height: 1.45; margin: 0 0 8px; }
+.crbtns { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0; }
+.crbtns .btn, .crrow .btn, table.pk .btn { padding: 5px 9px; font-size: 12px; }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.crrow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; min-width: 0; }
+.crrow .in { min-width: 0; }
+.ta { width: 100%; min-height: 96px; resize: vertical; font: 11.5px/1.4 var(--mono); color: var(--text); background: rgba(0,0,0,.3); border: 1px solid var(--card-edge); border-radius: 8px; padding: 8px 10px; white-space: pre; overflow: auto; }
+.crmsg { font-size: 12px; min-height: 1.3em; color: #9ff5b9; overflow-wrap: anywhere; }
+.crmsg.bad { color: #ff8a80; }
+.fp { font: 600 13px var(--mono); letter-spacing: .04em; color: #cfe3ff; overflow-wrap: anywhere; }
+.fp.big { font-size: 17px; display: block; padding: 8px 10px; background: rgba(74,168,255,.08); border: 1px solid rgba(74,168,255,.3); border-radius: 8px; }
+.crtw { overflow-x: auto; }
+.crtw table.pk td { white-space: nowrap; }
+.ok-t { color: #9ff5b9; } .warn-t { color: #ffd27a; } .bad-t { color: #ff8a80; }
+.modal .box.crbox { width: min(620px, 94vw); max-height: 90vh; overflow: auto; }
+</style>
+</head>
+<body>
+<div class="top">
+  <h1 id="title">Signum <span class="by">by N0GQ</span></h1>
+  <span class="pill modem" id="modem">P1/P2/P3</span>
+  <span class="sp"></span>
+  <div class="cputemp" title="CPU temperature; lamp amber from 70 °C, red from 80 °C">
+    <span class="cap">CPU temp</span>
+    <div class="segwin" id="ro_tc"></div><span class="unit">&deg;C</span>
+    <div class="segwin" id="ro_tf"></div><span class="unit">&deg;F</span>
+    <i class="led sm" id="L_hot"></i>
+  </div>
+  <div class="cputemp" id="cpugrp" data-tip tabindex="0" title="CPU: is this computer keeping up with the audio and the decodes? Green: yes. Yellow (busy) and red (starved): the audio loop or the decodes run late (with CPUadapt on, CPU-bound extras are left out meanwhile). Hover or tap for the reason.">
+    <span class="cap" id="cpucap">Computer</span><i class="led sm" id="L_cpu"></i>
+  </div>
+  <span class="pill" id="clock">t —</span>
+  <button class="pill" id="aboutbtn" style="cursor:pointer;border:1px solid var(--card-edge);background:none;color:var(--dim)">About</button>
+  <span class="pill bad" id="conn">connecting…</span>
+</div>
+<div class="wrap">
+  <div class="panel" id="panel">
+    <i class="screw tl"></i><i class="screw tr"></i><i class="screw bl"></i><i class="screw br"></i>
+    <div id="dispcol">
+      <div class="display"><canvas id="dm" width="1" height="1"></canvas></div>
+      <div class="cap" id="dispcap">Display</div>
+    </div>
+    <div class="lampblk">
+      <div class="lgrp"><div class="lamps">
+        <div class="lc"><i class="led" id="L_busy"></i><span class="lt"><span class="g">Free</span><span class="r">Busy</span></span></div>
+      </div><div class="cap">Channel</div></div>
+      <div class="lgrp"><div class="lamps">
+        <div class="lc"><i class="led" id="L_conn"></i><span class="lt"><span class="g">Connect</span><span class="r">Call</span></span></div>
+        <div class="lc"><i class="led" id="L_send"></i><span class="lt"><span class="g">Send</span><span class="r">Chg-over</span></span></div>
+        <div class="lc"><i class="led" id="L_traf"></i><span class="lt"><span class="g">Traffic</span><span class="r">Error</span></span></div>
+        <div class="lc"><i class="led" id="L_tx"></i><span class="lt"><span class="r">TX</span></span></div>
+      </div><div class="cap">Link</div></div>
+      <div class="lgrp" id="augrp"><div class="lamps" id="aulamps">
+        <div class="lc" id="LC_alow" data-tip tabindex="0"><i class="led sm" id="L_alow"></i><span class="lt"><span class="y">Low</span></span></div>
+        <div class="lc" id="LC_aok" data-tip tabindex="0"><i class="led sm" id="L_aok"></i><span class="lt"><span class="g">OK</span></span></div>
+        <div class="lc" id="LC_ahigh" data-tip tabindex="0"><i class="led sm" id="L_ahigh"></i><span class="lt"><span class="y">High</span>/<span class="r">Clip</span></span></div>
+      </div><div class="cap">RX audio</div></div>
+      <div class="lgrp ro-narrow" id="farlg2"><div class="lamps fargrp farbox" id="fargrp2"></div><div class="cap" id="farcap2" data-tip tabindex="0">Far end</div></div>
+      <div class="lgrp"><div class="lamps" id="mlamps"></div><div class="cap">Mode &middot; speed level &middot; TX over RX</div></div>
+    </div>
+    <div class="prow readouts">
+      <div class="ro"><div class="segwin" id="ro_time"></div><div class="cap">Link time</div></div>
+      <div class="ro"><div class="segwin" id="ro_in"></div><div class="cap">Chars in</div></div>
+      <div class="ro"><div class="segwin" id="ro_out"></div><div class="cap">Chars out</div></div>
+      <div class="ro" title="Characters a minute received, over the last minute of the link (from its start while it is shorter)"><div class="segwin" id="ro_rin"></div><div class="cap">Char/min in</div></div>
+      <div class="ro" title="Characters a minute sent and acknowledged, over the last minute of the link (from its start while it is shorter)"><div class="segwin" id="ro_rout"></div><div class="cap">Char/min out</div></div>
+      <div class="ro"><div class="segwin" id="ro_queue"></div><div class="cap">To send</div></div>
+      <div class="ro"><div class="segwin" id="ro_q"></div><div class="cap">Quality %</div></div>
+      <div class="ro"><div class="segwin" id="ro_afc"></div><div class="cap">Offset Hz</div></div>
+      <div class="ro ro-narrow" id="snr_ro2" data-tip tabindex="0"><div class="segwin" id="ro_snr2"></div><div class="cap">S/N dB</div></div>
+      <div class="ro ro-narrow" id="khz_ro2" data-tip tabindex="0"><div class="segwin" id="ro_khz2"></div><div class="cap">Radio kHz</div></div>
+    </div>
+    <div class="prow" id="row3">
+      <div id="infocol">
+      <div class="fargrp" id="fargrp"></div>
+      <div id="inforow">
+      <div id="tunecol">
+        <span id="peergrp"><span class="pcap">Peer</span><span class="lc" id="LC_pfer" data-tip tabindex="0"><i class="led sm" id="L_pfer"></i><span class="lt"><span class="g">Signum</span></span></span><span class="lc" id="LC_poth" data-tip tabindex="0"><i class="led sm" id="L_poth"></i><span class="lt"><span class="y">Other</span></span></span></span>
+        <div class="tuning" id="tuning"></div>
+        <div class="tlabel"><span>&minus;</span><span>Tuning</span><span>+</span></div>
+      </div>
+      <div class="ro" id="snr_ro" data-tip tabindex="0"><div class="segwin" id="ro_snr"></div><div class="cap">S/N dB</div></div>
+      <div class="ro" id="khz_ro" data-tip tabindex="0"><div class="segwin" id="ro_khz"></div><div class="cap">Radio kHz</div></div>
+      </div>
+      </div>
+      <div class="clocks">
+        <div class="ro"><div class="segwin" id="ro_utc"></div><div class="cap">UTC</div></div>
+        <div class="ro" id="loc_ro"><div class="segwin" id="ro_loc"></div><div class="cap" id="loc_cap">Local</div></div>
+      </div>
+      <div class="pbwrap">
+        <div class="pbbezel"><button class="pb" id="pbdisc" type="button" aria-label="Disconnect; press again while its lamp is lit to disconnect at once"><i class="led" id="L_qrt"></i>Disconnect</button></div>
+        <div class="cap">Twice: at once</div>
+      </div>
+    </div>
+    <div class="brand" id="brand"><b>HF data modem</b></div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab on" data-p="status">Status</button>
+    <button class="tab" data-p="config">Configure</button>
+    <button class="tab" data-p="terminal">Terminal</button>
+    <button class="tab" data-p="log">Log</button>
+  </div>
+
+  <div class="pane on" id="p-status">
+  <div class="grid" id="ctl">
+    <div class="card" style="grid-column:1/-1"><h2>Link control <span id="ctlmsg"></span></h2>
+      <div class="cmd" style="margin-top:0">
+        <input id="callto" placeholder="call to connect, e.g. N0CALL" autocomplete="off" spellcheck="false" style="text-transform:uppercase;max-width:260px">
+        <button id="bconnect">Connect</button>
+        <span class="saved" style="align-self:center">Disconnect: the button on the front panel (twice: at once)</span>
+      </div>
+    </div>
+  </div>
+  <div class="grid" id="cards"><div id="cards_rt" style="display:contents"></div>
+    <div class="card crypto-only" id="crcard" title="this link's protection (docs/md/encryption.md): encryption, or the identity check without encryption (verify); Signum to Signum only; a link where the protection asked for cannot be had is ended, never continued with less; on a link made by signum-chat or signum-sync, the protection is the one chosen in that program, not the Configure tab's"><h2>Encryption <span>this link</span></h2>
+      <div class="kv">
+        <div class="k">State</div><div class="v" id="crs_state">—</div>
+        <div class="k">Station</div><div class="v" id="crs_call">—</div>
+        <div class="k">Method</div><div class="v" id="crs_method">—</div>
+        <div class="k">SAS</div><div class="v" id="crs_sas">—</div>
+        <div class="k">Their key</div><div class="v" id="crs_key">—</div>
+        <div class="k">Note</div><div class="v" id="crs_note">—</div>
+        <div class="k">Traffic</div><div class="v" id="crs_traffic">—</div>
+        <div class="k">Keys received</div><div class="v" id="crs_recv">—</div>
+      </div>
+      <div class="crbtns"><button class="btn" id="crs_verify" disabled title="after comparing the SAS (or the fingerprint) with the other operator by voice on another channel: marks verified the key this station presented on this link, nothing else">Their key: mark verified…</button>
+        <button class="btn" id="crs_replace" disabled title="after a link failed because the other station presented a key other than the one stored for it: shows the old and the new fingerprint and replaces the stored key once you have confirmed the new one with its operator">Replace stored key…</button></div>
+      <div class="crmsg" id="crs_msg"></div>
+    </div>
+  </div>
+
+  <div class="term">
+    <details id="wfbox" open>
+      <summary>Waterfall · receive audio</summary>
+      <div class="wfwrap" title="the modem's receive audio">
+        <canvas id="wfc"></canvas><canvas id="wfs"></canvas>
+      </div>
+      <div class="wfctl">
+        <label>Span <select id="wf_rng"><option value="0,4000">0–4000 Hz</option><option value="300,2700" selected>300–2700 Hz</option><option value="1000,2000">1000–2000 Hz</option></select></label>
+        <label>Range <input type="range" id="wf_dr" min="20" max="90" value="45"> <span id="wf_drv">45 dB</span></label>
+        <label>Speed <select id="wf_rate"><option value="5">slow</option><option value="10" selected>normal</option><option value="20">fast</option></select></label>
+        <span id="wf_info">—</span>
+      </div>
+    </details>
+  </div>
+
+  <div class="term">
+    <details id="linksbox">
+      <summary>Links · this run, newest first</summary>
+      <div class="linkswrap"><table class="pk" id="links"><tr><td class="muted">—</td></tr></table></div>
+    </details>
+  </div>
+
+  <div class="term">
+    <details id="termbox" open>
+      <summary>Received text and commands</summary>
+      <pre id="rx"></pre>
+      <div class="cmd">
+        <select id="mode"><option value="command">terminal command</option><option value="send">Send text</option></select>
+        <input id="line" placeholder="e.g. MYcall, MYLevel 2, C N0CALL, D" autocomplete="off" spellcheck="false">
+        <button id="go">Send</button>
+      </div>
+    </details>
+  </div>
+  </div>
+
+  <div class="pane" id="p-config">
+    <div class="cfgbar">
+      <span class="lbl">settings</span>
+      <span class="saved" id="savedmsg">live settings apply at once, as the terminal commands do; next-start settings go into the settings file</span>
+      <button class="btn" id="c_keep" title="write the live settings that have a start-up option (callsign, highest level, tones, Listen, CPU features, tuning tone, TX gain, watchdog) into the settings file, so the next start begins with them">Keep live settings at next start</button>
+      <span class="saved" id="c_keepmsg"></span>
+    </div>
+    <div class="grid cfggrid">
+      <div class="card"><h2>Station <span>applies at once</span></h2>
+        <div class="form">
+          <div class="k">Callsign (MYcall)</div><div><input class="in" id="c_call" data-opt="--call MYcall" style="width:160px;text-transform:uppercase" spellcheck="false"></div>
+          <div class="hint">your call sign; default N0CALL</div>
+          <div class="k">Highest level (MYLevel)</div><div class="seg" id="c_myl" data-opt="--mylevel MYLevel"><button data-v="1">P1</button><button data-v="2">P2</button><button data-v="3">P3</button></div>
+          <div class="hint">the highest mode offered or accepted; default P3</div>
+          <div class="k">Compression (MOde)</div><div class="seg" id="c_mode" data-opt="MOde"><button data-v="0">ASCII</button><button data-v="1">Huffman</button><button data-v="2">PMC</button></div>
+          <div class="hint">default PMC (Huffman or PMC, whichever is shorter)</div>
+          <div class="k">Tones (Hz)</div><div data-opt="--tones TOnes MARk SPAce"><input class="in" id="c_lo" type="number" min="300" max="3000" style="width:90px"> / <input class="in" id="c_hi" type="number" min="300" max="3000" style="width:90px">
+            <button class="btn" id="c_t4" style="margin-left:6px">TONES 4</button></div>
+          <div class="hint">space / mark, 300-3000; TONES 4 = 1400 / 1600 (the P3 standard, the default)</div>
+          <div id="c_station" class="form" style="grid-column:1/-1"></div>
+        </div>
+      </div>
+      <div class="card"><h2>Listen &amp; unproto <span>Listen and repetitions at once</span></h2>
+        <div class="form">
+          <div class="k">Listen mode (Listen)</div><div class="seg" id="c_listen" data-opt="--listen Listen"><button data-v="0">Off</button><button data-v="1">On</button></div>
+          <div class="hint">while idle, other stations' QSOs are decoded and shown (purple) in Status; default on (the reference unit's); off saves ~20 % of one Raspberry Pi 4 core while idle</div>
+          <div id="c_listenp" class="form" style="grid-column:1/-1"></div>
+        </div>
+      </div>
+      <div class="card"><h2>Peer marker <span>from the next link</span></h2>
+        <div class="form">
+          <div class="k">Signum peer marker (PEERmark)</div><div class="seg" id="c_peer" data-opt="--peer-marker PEERmark" title="On: Signum sends a short system sequence on each P2/P3 link (never on P1). The reference unit skips it silently: it shows nothing and changes nothing. Another Signum reads it, so both front panels light Signum. Off: nothing extra is sent; the Other lamp stays dark, and a Signum shows only on encrypted links or by its own marker."><button data-v="1">On</button><button data-v="0">Off</button></div>
+          <div class="hint">on (default; the reference unit has no such marker): two Signums recognise each other on P2/P3 links, shown by the front panel's Peer lamps (Signum / Other); off: nothing extra is sent. Never sent on P1</div>
+        </div>
+      </div>
+      <div class="card"><h2>ALC warning <span>at once; warns only</span></h2>
+        <div class="form">
+          <div class="k">Warn when the radio's ALC acts (ALCwarn)</div><div class="seg" id="c_alc" data-opt="--alc-warn ALCwarn" title="On: while we send on a P2/P3 link, Signum reads the radio's ALC meter through rigctld (the PTT must be rig:HOST:PORT; the radio must give an ALC reading) and, when the ALC acts on most bursts, writes one warning in the log and shows it on the Status tab's Drive (ALC) card. It never changes the TX gain or the radio's power. Off: the meter is not read."><button data-v="1">On</button><button data-v="0">Off</button></div>
+          <div class="hint">on (default): a drive that makes the radio's ALC squash the PSK peaks is reported (Status tab, Drive (ALC) card, and the log); nothing is changed. Needs --ptt rig: (rigctld)</div>
+        </div>
+      </div>
+      <div class="card"><h2>Link parameters <span>applies at once, or after the link</span></h2>
+        <div class="form" id="c_params"></div>
+        <div class="ms-note" id="c_perr"></div>
+      </div>
+      <div class="card"><h2>Tuning tone <span>before each new call we place</span></h2>
+        <div class="form" id="c_tune"></div>
+      </div>
+      <div class="card"><h2>CPU &amp; performance</h2>
+        <div class="form">
+          <div class="k">Adaptive CPU features (CPUadapt)</div><div class="seg" id="c_cpuad" data-opt="--cpu-adaptive CPUadapt" title="Adaptive: features that need more computing (for now: long packets as P3 receiver) are used and switched off level by level when this computer's decodes come late. Off: never used (no retries on a slow computer)."><button data-v="1">Adaptive</button><button data-v="0">Off</button></div>
+          <div class="hint" id="c_cpuad_h">adaptive: long packets as P3 receiver, dropped by level if this computer cannot decode them in time; off: never asked for</div>
+          <div id="c_cpu" class="form" style="grid-column:1/-1"></div>
+        </div>
+      </div>
+      <div class="card"><h2>Host interface <span>applies at once</span></h2>
+        <div class="form" id="c_host"></div>
+      </div>
+      <div class="card"><h2>Radio &amp; audio <span>applies at next start</span></h2>
+        <div class="form" id="c_radio"></div>
+        <div class="form" id="c_rig">
+          <div class="k">Icom IC-7300</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn" id="ic73_setup" data-opt="--detect-ic7300 --configure-my-ic7300-and-overwrite-its-settings --backup-ic7300-settings" title="Finds the IC-7300 on USB (its serial port and sound card, CI-V rate and address), shows its settings, and after your confirmation backs them up and sets the radio for Signum over CI-V; then fills in Sound card and PTT. Never RF power or frequency.">Set up my IC-7300…</button>
+            <button class="btn" id="ic73_ext" data-opt="--configure-my-ic7300-for-an-external-modem-and-overwrite-its-settings" title="The same dialog, for a hardware modem (such as the reference unit) on the radio's ACC socket instead of Signum on USB: DATA MOD = ACC, USB SEND and USB Keying OFF so nothing on USB can key the radio, ACC MOD Level 50 %; the rest as for Signum, so either set-up brings the radio back from the other. Signum's own settings are not touched, and it cannot key the radio until you press Set up my IC-7300… again. Never RF power or frequency.">Set up my IC-7300 for an external modem…</button>
+            <button class="btn" id="ic73_restore" data-opt="--restore-ic7300-settings" title="Writes a backup taken by the set-up (or Back up only) back to its radio, after your confirmation">Restore IC-7300 settings…</button></div>
+          <div class="hint">zero-effort set-up for an IC-7300 on USB: backs up the radio's settings, sets its menus for Signum (USB-D, DATA MOD USB, USB SEND RTS, ...) and fills in Sound card and PTT; never RF power or frequency</div>
+          <div class="k">IC-7300 power</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><input type="number" id="ic73_w" min="1" max="100" step="1" value="20" style="width:6em" data-opt="--ic7300-power ICPower" title="The wanted PEAK power of P2/P3 PSK bursts, in watts (1-100)"> W peak
+            <button class="btn" id="ic73_pw" data-opt="--ic7300-power ICPower" title="Reads the radio over CI-V and sets the drive and RF POWER for that peak (a model from on-air measurements; it never transmits): the TX gain the model names so that the ALC stays at rest even on a hot radio (20 W gives -2 dB; +4 dB, the default of both station IC-7300s, only from about 67 W up), with the USB MOD Level at the Signum set-up's 100 %; then RF POWER a little above the peaks, so the ALC stays at rest. The TX gain applies at once and is saved in the settings file. Backup first (Restore puts RF POWER and the USB MOD Level back). Measuring on the air instead: signum --ic7300-power W --measure with Signum stopped (it needs the sound card).">Set IC-7300 power</button></div>
+          <div class="hint" id="ic73_pwout">TX gain and RF POWER for a wanted P2/P3 peak (the ALC never touching the peaks); also tells you what P1 calls will read. Never transmits</div>
+        </div>
+      </div>
+      <div class="card"><h2>Timing calibration <span>applies at next start</span></h2>
+        <div class="form" id="c_cal"></div>
+      </div>
+      <div class="card"><h2>Connections &amp; logins <span>applies at next start</span></h2>
+        <div class="form" id="c_net"></div>
+      </div>
+      <div class="card"><h2>Kept for compatibility <span>no effect in Signum</span></h2>
+        <div class="form" id="c_compat"></div>
+      </div>
+      <div class="card crypto-only" id="cr_main" style="grid-column:1/-1" title="signum-chat and signum-sync override this setting for their own links: the protection chosen in chat or sync (off, verify, verify and sign, encrypt) replaces what is set here for that link, up or down; off in chat or sync means plain text even when encryption is on here. This setting comes back when their link ends and applies to every other link (docs/md/encryption.md)"><h2>Encryption and identity check <span>Signum to Signum only · off by default</span></h2>
+        <div class="crwarn" id="cr_warnbox"><span id="cr_warning"></span></div>
+        <div class="crwarn amber"><b>NOT compatible with SCS.</b> <span id="cr_notcomp"></span></div>
+        <div class="crnote" id="cr_noplain"></div>
+        <div class="form">
+          <div class="k">Protection (now)</div><div class="seg" id="cr_on" data-opt="--encryption --encryption-ack"><button data-v="0">Off</button><button data-v="v">Verify</button><button data-v="1">On…</button></div>
+          <div class="hint">verify: every P2/P3 link to another Signum checks the other station's key at link start (the same keys and handshake as encryption), then the data goes in clear; no acknowledgement; a link where the check cannot be made (the reference unit, an older Signum, an untrusted key) is ended. On: every link is encrypted, or ended with the reason, never sent in clear; the first On asks for the acknowledgement NOT-AMATEUR; once given it is stored in the settings file and On (and Off) act at once. Not while a link is up; this run</div>
+          <div class="k">Protection at next start</div><div class="seg" id="s_encryption" data-opt="--encryption --encryption-ack"><button data-v="">Off</button><button data-v="verify">Verify</button><button data-v="on">On…</button></div>
+          <div class="hint">writes encryption = verify or encryption = on to the settings file (On: and encryption-ack = NOT-AMATEUR, after the acknowledgement, when it is not stored yet); Off removes the line; default off · <span class="now" id="n_s_encryption"></span></div>
+          <div class="k">Sign every record</div><div class="seg" id="cr_sign" data-opt="--sign"><button data-v="1">On</button><button data-v="0">Off</button></div>
+          <div class="hint">verify only: on adds a 16-byte authentication tag to every record (the data still in clear; a bad tag ends the link; used when either Signum asks for it); off (default): the identity is checked at link start only, and a station taking the link over after the check is NOT detected. No extra effect with encryption on (every record is authenticated anyway); from the next link</div>
+          <div class="k">Acknowledgement</div><div style="display:flex;gap:6px;align-items:center;min-width:0"><button class="btn" id="cr_ackoff" data-opt="--encryption-ack" title="removes encryption-ack from the settings file and turns encryption off: the next On asks for NOT-AMATEUR again">Withdraw acknowledgement</button></div>
+          <div class="hint">NOT-AMATEUR, given once, is kept in the settings file so that encryption and its options can be turned on and off without typing it again; withdrawing it also turns encryption off · <span class="now" id="n_cr_ack"></span></div>
+          <div class="k">Compression</div><div class="seg" id="cr_comp" data-opt="--encryption-compression"><button data-v="1">On</button><button data-v="0">Off</button></div>
+          <div class="hint">compress before encrypting (zstd with an English dictionary), used when both Signums have it on; default on; from the next link</div>
+          <div class="k">Trust (encryption)</div><div class="seg" id="cr_trust" data-opt="--encryption-trust"><button data-v="stored">Stored only</button><button data-v="tofu">First contact</button><button data-v="verified">Verified only</button></div>
+          <div class="hint">first contact (default): a new station's key is stored, not verified, at the first link (compare the SAS); stored only: only stations whose key is already stored here; verified only: links only with stations whose key you marked verified</div>
+          <div class="k">Trust (verify)</div><div class="seg" id="cr_vtrust" data-opt="--verify-trust"><button data-v="stored">Stored only</button><button data-v="tofu">First contact</button><button data-v="verified">Verified only</button></div>
+          <div class="hint">the identity check's policy: stored only (default): only a key already stored here passes; first contact: a new station's key is stored, not verified, and the link goes on; verified only: only keys you marked verified. A "*" pre-shared key alone passes only with first contact (it does not show which station this is)</div>
+          <div class="k">Set-up timeout (s)</div><div><input class="in" type="number" min="10" max="600" id="cr_wait" data-opt="--encryption-wait" style="width:100px"></div>
+          <div class="hint">the other station's capability record and the handshake, each at most this long, 10-600; default 60; then the link is ended</div>
+          <div class="k">Key directory</div><div style="display:flex;gap:6px;align-items:center;min-width:0"><input class="in" id="s_key_dir" data-opt="--key-dir" spellcheck="false" style="width:100%;max-width:300px"></div>
+          <div class="hint">where the keys are kept (mode 0700); applies at next start; default ~/.config/signum/keys · <span class="now" id="n_s_key_dir"></span></div>
+        </div>
+        <div class="crmsg" id="cr_msg"></div>
+        <div class="crnote">Signing, compression, trust and the timeout apply at once, for this run; <b>Keep live settings at next start</b> (top of this tab) writes them to the settings file too.</div>
+      </div>
+      <div class="card crypto-only" id="cr_mine"><h2>This station's key pair <span>for links with station keys</span></h2>
+        <div class="kv"><div class="k">Fingerprint</div><div class="v wrap"><span class="fp" id="cr_fp">—</span></div></div>
+        <div class="crbtns" data-opt="--keygen --show-key">
+          <button class="btn" id="cr_keygen" data-opt="--keygen">Generate key pair</button>
+          <button class="btn" id="cr_copy" data-opt="--show-key">Copy public key</button>
+          <button class="btn" id="cr_save">Save public key…</button>
+          <button class="btn" id="cr_sendkey" title="sends this station's public key block as text on the current link (in clear on a plain link: a public key is not secret)">Send over the air</button>
+          <button class="btn danger" id="cr_priv">Export private key…</button>
+        </div>
+        <textarea class="ta" id="cr_pub" readonly spellcheck="false" placeholder="no key pair yet: Generate key pair"></textarea>
+        <div class="crmsg" id="cr_mine_msg"></div>
+        <div class="crnote">The public key is not secret: give it to the other operator any way you like, then read the fingerprint to each other by telephone or in person. The private key never leaves this computer unless you export it (to move the station).</div>
+      </div>
+      <div class="card crypto-only" id="cr_import"><h2>Import keys <span>public, private, pre-shared</span></h2>
+        <textarea class="ta" id="cri_text" spellcheck="false" placeholder="paste one or more -----BEGIN SIGNUM ... KEY----- blocks, or open a file"></textarea>
+        <div class="crrow"><input type="file" id="cri_file" accept=".txt,.key,.pub,text/plain" style="max-width:100%;font-size:12px;color:var(--dim)"></div>
+        <div class="crrow"><input class="in" id="cri_call" placeholder="call (block without a Call line)" spellcheck="false" style="text-transform:uppercase;width:230px">
+          <label class="saved" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="cri_force"> replace this station's key pair</label>
+          <button class="btn primary" id="cri_go">Import</button></div>
+        <div class="crmsg" id="cri_msg"></div>
+        <div class="crnote">Imported public keys are stored as NOT verified: verify each one under Known stations after comparing the fingerprint.</div>
+      </div>
+      <div class="card crypto-only" id="cr_peers" style="grid-column:1/-1"><h2>Known stations <span>public keys</span></h2>
+        <div class="crtw"><table class="pk" id="cr_peer_t"><tr><td class="muted">—</td></tr></table></div>
+        <div class="crrow"><input class="in" id="crk_call" placeholder="call" spellcheck="false" style="text-transform:uppercase;width:120px">
+          <input class="in" id="crk_key" placeholder="key: the 44 characters of its Key line" spellcheck="false" style="flex:1;min-width:200px">
+          <button class="btn" id="crk_add">Add (not verified)</button></div>
+        <div class="crmsg" id="cr_peer_msg"></div>
+        <h2 style="margin-top:10px">Received over the air <span>not trusted until you accept</span></h2>
+        <div class="crtw"><table class="pk" id="cr_recv_t"><tr><td class="muted">—</td></tr></table></div>
+        <div class="crnote">A key that arrived over the air could come from anyone. Review shows its fingerprint: compare it with the other operator by another channel before you accept it as verified.</div>
+      </div>
+      <div class="card crypto-only" id="cr_psk" style="grid-column:1/-1"><h2>Pre-shared keys <span>secret: give them only by a safe channel</span></h2>
+        <div class="crtw"><table class="pk" id="cr_psk_t"><tr><td class="muted">—</td></tr></table></div>
+        <div class="crrow"><span class="saved">Name</span><input class="in" id="crp_name" value="*" spellcheck="false" style="text-transform:uppercase;width:110px" title="a call sign (a key for that station only), or * for every station; a key for the call wins over *">
+          <button class="btn" id="crp_gen">Generate random</button></div>
+        <div class="crrow"><input class="in" id="crp_key" placeholder="key: 44 characters (the Key line of its block)" spellcheck="false" style="flex:1;min-width:200px"><button class="btn" id="crp_set">Set</button></div>
+        <div class="crrow"><input class="in" id="crp_phrase" type="password" autocomplete="off" placeholder="passphrase, at least 20 characters" style="flex:1;min-width:200px"><button class="btn" id="crp_ph">From passphrase</button></div>
+        <div class="crmsg" id="cr_psk_msg"></div>
+        <div class="crnote">A random key is stronger than a passphrase. The 4-character id is the same at both ends when the keys are the same. Export shows the block to give to the other operator (in person, encrypted mail; never over the air).</div>
+      </div>
+      <div class="card"><h2>Settings file <span>read at start</span></h2>
+        <div id="c_file" class="kv"></div>
+        <div class="ms-note" id="c_serr"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="pane" id="p-terminal">
+    <div class="tty" id="tty" tabindex="0"></div>
+    <div class="ttykeys">
+      <button class="btn" data-k="\u001b">ESC (command)</button>
+      <button class="btn" data-k="\u0004">Ctrl-D (QRT)</button>
+      <button class="btn" data-k="\u0019">Ctrl-Y (break-in)</button>
+      <button class="btn" id="ttyclear">Clear</button>
+      <label class="saved" style="align-self:center;display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="ttyecho" checked> Local echo</label>
+      <span class="saved" style="align-self:center">Commands at cmd:, C CALL to connect, then converse. Click the terminal and type; keys: Esc, Ctrl-D, Ctrl-Y. Local echo shows what you type (the interpreter does not echo it).</span>
+    </div>
+  </div>
+
+  <div class="pane" id="p-log">
+    <div class="ttykeys" style="margin-top:16px">
+      <button class="btn" id="logclear">Clear</button>
+      <label class="chk" style="margin-top:0"><input type="checkbox" id="logfollow" checked> follow</label>
+      <span class="saved" style="align-self:center">The modem's log (the last 500 lines are kept by the TNC).</span>
+    </div>
+    <pre class="tty" id="log" style="height:520px;cursor:auto"></pre>
+  </div>
+</div>
+
+<div class="modal" id="about"><div class="box about">
+  <h3>Signum</h3>
+  <div class="saved">A P1/P2/P3 HF data modem with the classic host-mode interface, for Pat and serial terminals.</div>
+  <div class="notaffil">Signum is an independent program. It is <u>not</u> a product of, affiliated with or supported by any modem manufacturer. Do not ask them for help with it.</div>
+  <div id="ab_build"></div>
+  <h4>Parts</h4>
+  <ul class="abl">
+    <li>The modem, this page, the WebSocket server and the panel viewer: Jeff Francis, N0GQ (GPL-3.0-or-later).</li>
+    <li>The program uses ALSA's libasound (LGPL-2.1-or-later), dynamically linked. This page loads nothing from elsewhere.</li>
+  </ul>
+  <div class="saved">Copyright (C) 2026 Jeff Francis, N0GQ. Signum is free software, licensed under the GNU General Public
+    License version 3 or later (GPL-3.0-or-later); it comes with NO WARRANTY. The licence text is the file COPYING.</div>
+  <button class="btn" id="ab_close">Close</button>
+</div></div>
+<div class="modal" id="rig"><div class="box rig">
+  <h3 id="rig_title">Set up an Icom IC-7300</h3>
+  <div class="saved" id="rig_status"></div>
+  <div id="rig_pick"></div>
+  <div id="rig_plan"></div>
+  <div class="rigwarn" id="rig_warn" style="display:none"></div>
+  <label class="chk" id="rig_b0row" style="display:none;margin-top:0"><input type="checkbox" id="rig_b0"> Let Signum set the port's speed to find the radio (RTS/DTR rise for about a millisecond)</label>
+  <label class="chk" id="rig_ackrow" style="display:none;margin-top:0"><input type="checkbox" id="rig_ack"> I understand my radio's current configuration will be lost</label>
+  <div class="rigsteps" id="rig_steps"></div>
+  <div class="rigbtns"><button class="btn danger go" id="rig_go" disabled>Reconfigure the radio</button><button class="btn" id="rig_bk" style="display:none">Back up only</button><button class="btn" id="rig_again">Look again</button><button class="btn" id="rig_close">Close</button></div>
+</div></div>
+<div class="modal" id="crack"><div class="box crbox">
+  <h3 id="crack_title">Turn encryption on</h3>
+  <div class="crwarn"><span id="crack_warn"></span></div>
+  <div class="crwarn amber"><b>NOT compatible with SCS.</b> <span id="crack_nc"></span></div>
+  <div class="crnote" id="crack_np"></div>
+  <label class="saved" for="crack_in">Type <b>NOT-AMATEUR</b> to confirm that this station does not use the amateur bands and that encryption is lawful where it does:</label>
+  <input class="in" id="crack_in" autocomplete="off" spellcheck="false" placeholder="NOT-AMATEUR">
+  <div class="crbtns"><button class="btn danger" id="crack_go" disabled>Turn encryption on</button><button class="btn" id="crack_cancel">Cancel</button></div>
+  <div class="crmsg bad" id="crack_err"></div>
+</div></div>
+<div class="modal" id="crdlg"><div class="box crbox">
+  <h3 id="crdlg_t"></h3>
+  <div id="crdlg_b"></div>
+  <div class="crbtns" id="crdlg_btns"></div>
+</div></div>
+<div class="modal" id="login"><div class="box">
+  <h3>WebSocket login</h3>
+  <div class="saved">This TNC requires credentials for its control interface.</div>
+  <input class="in" id="lu" placeholder="user" autocomplete="username">
+  <input class="in" id="lp" placeholder="password" type="password" autocomplete="current-password">
+  <button class="btn primary" id="lgo">Log in</button>
+</div></div>
+
+<script>
+"use strict";
+// ---------------------------------------------------------------- 5x7 font
+// Columns, bit 0 = top row (the classic LCD font), ASCII 0x20-0x7E.
+const FONT = [
+"0000000000","00005f0000","0007000700","147f147f14","242a7f2a12","2313086462","3649562050","0008070300","001c224100","0041221c00",
+"2a1c7f1c2a","08083e0808","0080703000","0808080808","0000606000","2010080402","3e5149453e","00427f4000","7249494946","2141494d33",
+"1814127f10","2745454539","3c4a494931","4121110907","3649494936","464949291e","0000140000","0040340000","0008142241","1414141414",
+"0041221408","0201590906","3e415d594e","7c1211127c","7f49494936","3e41414122","7f4141413e","7f49494941","7f09090901","3e41415173",
+"7f0808087f","00417f4100","2040413f01","7f08142241","7f40404040","7f021c027f","7f0408107f","3e4141413e","7f09090906","3e4151215e",
+"7f09192946","2649494932","03017f0103","3f4040403f","1f2040201f","3f4038403f","6314081463","0304780403","61594 94d43".replace(/ /g,""),"007f414141",
+"0204081020","004141417f","0402010204","4040404040","0003070800","2054547840","7f28444438","3844444428","384444287f","3854545418",
+"00087e0902","18a4a49c78","7f08040478","00447d4000","2040403d00","7f10284400","00417f4000","7c0478047c","7c08040478","3844444438",
+"fc18242418","182424 18fc".replace(/ /g,""),"7c08040408","4854545424","04043f4424","3c4040207c","1c2040201c","3c4030403c","4428102844","4c9090907c",
+"4464544c44","0008364100","0000770000","0041360800","0201020402"];
+function glyph(ch) {
+  const c = ch.charCodeAt(0);
+  const h = FONT[(c >= 32 && c <= 126) ? c - 32 : 31];
+  const cols = [];
+  for (let i = 0; i < 5; i++) cols.push(parseInt(h.substr(i * 2, 2), 16));
+  return cols;                                   // 5 columns, bit r = row r
+}
+
+// ---------------------------------------------------------------- dot matrix
+const DM = { chars: 16, lines: 2, cols: 5, rows: 7, pitch: 5, gap: 6, lgap: 9, pad: 2 };
+const dmc = document.getElementById("dm");
+function dmSize() {
+  const w = DM.chars * DM.cols * DM.pitch + (DM.chars - 1) * DM.gap + 2 * DM.pad;
+  const h = DM.lines * DM.rows * DM.pitch + (DM.lines - 1) * DM.lgap + 2 * DM.pad;
+  const s = window.devicePixelRatio || 1;
+  dmc.width = w * s * 2; dmc.height = h * s * 2; dmc.style.maxWidth = (w * 1.05) + "px";
+  return s;
+}
+let dmScale = dmSize();
+function drawDots(lines, on) {                   // lines[line][char][row][col] booleans
+  const x = dmc.getContext("2d"), s = dmScale * 2;
+  x.setTransform(s, 0, 0, s, 0, 0);
+  x.clearRect(0, 0, dmc.width, dmc.height);
+  for (let l = 0; l < DM.lines; l++)
+  for (let c = 0; c < DM.chars; c++)
+    for (let r = 0; r < DM.rows; r++)
+      for (let k = 0; k < DM.cols; k++) {
+        const lit = on && lines[l] && lines[l][c] && lines[l][c][r][k];
+        const cx = DM.pad + c * (DM.cols * DM.pitch + DM.gap) + k * DM.pitch + DM.pitch / 2;
+        const cy = DM.pad + l * (DM.rows * DM.pitch + DM.lgap) + r * DM.pitch + DM.pitch / 2;
+        if (lit) {
+          x.shadowColor = "rgba(80,255,130,0.85)"; x.shadowBlur = 4;
+          const g = x.createRadialGradient(cx - 0.5, cy - 0.6, 0.2, cx, cy, 2.2);
+          g.addColorStop(0, "#eaffef"); g.addColorStop(0.35, "#5dff8c"); g.addColorStop(1, "#11a33c");
+          x.fillStyle = g;
+        } else { x.shadowBlur = 0; x.fillStyle = "#0f2216"; }
+        x.beginPath(); x.arc(cx, cy, 1.85, 0, Math.PI * 2); x.fill();
+      }
+  x.shadowBlur = 0;
+}
+function textDots(text) {
+  const t = (text || "").padEnd(DM.chars).slice(0, DM.chars), out = [];
+  for (const ch of t) {
+    const g = glyph(ch), m = [];
+    for (let r = 0; r < 7; r++) { const row = []; for (let k = 0; k < 5; k++) row.push(!!(g[k] >> r & 1)); m.push(row); }
+    out.push(m);
+  }
+  return out;
+}
+// ---------------------------------------------------------------- front panel
+// A fixed hardware panel (owner, 2026-11-12): every lamp is always there with a fixed engraved
+// label; only lamps light or go dark, and changing values appear only in the display windows
+// (the dot-matrix display and the seven-segment readouts). Kept from the reference unit's
+// nine bicolour LEDs: Traffic/Error, Send/CHO and Connected (Mail dropped: Signum has no
+// mailbox); the others went (docs/md/gui.md "The front panel"). Added: Free/Busy, Call (on the Connect
+// lamp), TX, the mode and speed-level lamps at fixed places, the readouts, the Disconnect button.
+const D = id => document.getElementById(id);
+function setLed(el, colour) { el.className = el.className.replace(/\b(green|red|yellow)\b/g, "").trim() + (["green", "red", "yellow"].includes(colour) ? " " + colour : ""); }
+// mode / speed-level lamps: P1 100 200 | P2 1 2 3 4 | P3 1 2 3 4 5 6 | long/short, always all of them; each speed
+// level and the long/short lamp twice, the TX row (the level this station sends at) over the RX row (the level the
+// other station sends at): in P3 the two directions run at levels of their own (owner, 2026-11-22)
+const MODES = [[1, ["100", "200"]], [2, ["1", "2", "3", "4"]], [3, ["1", "2", "3", "4", "5", "6"]]];
+const DIRS = [["T", "TX: this station sends at"], ["R", "RX: the other station sends at"]];
+// Two lines (mline): P1 and P2, then P3 and L/S, each with its TX/RX labels; one row (the lines display: contents, the
+// second's labels hidden) but on a phone (under 560 px), where they are two lines and the group only as wide as they
+const MLAB = cls => `<div class="mgrp ${cls}"><div class="mcol mrow"><div class="mstk"><span>TX</span><span>RX</span></div><span class="lt">&nbsp;</span></div></div>`;
+D("mlamps").innerHTML = `<div class="mline">` + MLAB("mlab") +
+  MODES.map(([p, lv]) => (p === 3 ? `</div><div class="mline">` + MLAB("mlab2") : "") + `<span class="msep"></span><div class="mgrp">` +
+  `<div class="mcol mode"><div class="mstk"><i class="led" id="M${p}"></i></div><span class="lt">P${p}</span></div>` +
+  lv.map((n, k) => `<div class="mcol"><div class="mstk">` + DIRS.map(([d, t]) =>
+    `<i class="led sm" id="M${d}${p}_${k + 1}" title="${t} P${p} ${p === 1 ? n + " Bd" : "speed level " + n}"></i>`).join("") +
+    `</div><span class="lt">${n}</span></div>`).join("") + `</div>`).join("") +
+  `<span class="msep"></span><div class="mgrp"><div class="mcol ls"><div class="mstk">` + DIRS.map(([d, t]) =>
+    `<i class="led sm" id="M${d}_ls" title="${t}: long packets (green) or short packets (red)"></i>`).join("") +
+  `</div><span class="lt"><span class="g">L</span>/<span class="r">S</span></span></div></div></div>`;
+// Tooltips on a tap: a lamp with data-tip shows its title in a box under it on a tap (phones have no hover),
+// a click or Enter/Space; a second tap, a tap elsewhere, Escape or scrolling hides it. The box is fixed over
+// the page, so nothing on the panel moves; its text follows the lamp while it is open (tipRefresh).
+const tipBox = document.createElement("div"); tipBox.className = "tipbox"; tipBox.id = "tipbox"; tipBox.hidden = true; tipBox.setAttribute("role", "tooltip");
+document.body.appendChild(tipBox);
+let tipFor = null;
+function tipHide() { tipFor = null; tipBox.hidden = true; }
+function tipShow(el) {
+  tipFor = el; tipBox.textContent = el.title; tipBox.hidden = false;
+  const r = el.getBoundingClientRect(), w = tipBox.offsetWidth, h = tipBox.offsetHeight, vw = document.documentElement.clientWidth;
+  tipBox.style.left = Math.max(16, Math.min(vw - w - 16, r.left + r.width / 2 - w / 2)) + "px";
+  tipBox.style.top = (r.bottom + 8 + h > window.innerHeight && r.top - 8 - h > 0 ? r.top - 8 - h : r.bottom + 8) + "px";
+}
+function tipRefresh(el) { if (tipFor === el && tipBox.textContent !== el.title) tipShow(el); }
+document.addEventListener("click", e => { const el = e.target.closest("[data-tip]"); if (el && el !== tipFor) tipShow(el); else tipHide(); });
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") { tipHide(); return; }
+  const el = document.activeElement;
+  if ((e.key === "Enter" || e.key === " ") && el && el.matches && el.matches("[data-tip]")) { e.preventDefault(); if (tipFor === el) tipHide(); else tipShow(el); }
+});
+window.addEventListener("scroll", tipHide, {passive: true}); window.addEventListener("resize", tipHide);
+// The tuning row: 15 LEDs. The reference unit lights one LED per step of its tuning error, red
+// while the offset exceeds 10 Hz (seen on the reference unit). The TNC sends the LED (tune_led, 5 Hz
+// per LED: its choice, the reference unit's step is not known) and the colour (freq_led).
+const tun = D("tuning"), segs = [];
+for (let i = 0; i < 15; i++) { const s = document.createElement("i"); s.className = "seg" + (i === 7 ? " mid" : ""); tun.appendChild(s); segs.push(s); }
+// The top-left title: "SIGNUM by N0GQ", then the station's call once known
+function setTitle(call) { $("#title").innerHTML = `Signum <span class="by">by N0GQ</span> &middot; ${call.replace(/[&<>"]/g, "")}`; }
+let makerText = "Signum";
+function setBrand() { D("brand").innerHTML = `<span class="mk">${makerText.replace(/[&<>"]/g, "")}</span> &nbsp;&middot;&nbsp; <b>HF data modem</b>`; }
+setBrand();
+
+// Seven-segment readouts (SVG): every digit's segments drawn dark, the lit ones red. text: digits,
+// "-", " ", "." (the decimal point of the digit before), ":" (a colon cell); n: digit cells.
+const SEGS = {"0": "abcdef", "1": "bc", "2": "abdeg", "3": "abcdg", "4": "bcfg", "5": "acdfg", "6": "acdefg", "7": "abc", "8": "abcdefg", "9": "abcdfg", "-": "g", " ": ""};
+const SEG_GEOM = (() => {
+  const w = 12, h = 22, t = 2.3, x0 = 1.6, x1 = w - 1.6, ya = 1.6, yg = h / 2, yd = h - 1.6;
+  const H = y => `${x0 + t / 2 + .3},${y} ${x0 + t},${y - t / 2} ${x1 - t},${y - t / 2} ${x1 - t / 2 - .3},${y} ${x1 - t},${y + t / 2} ${x0 + t},${y + t / 2}`;
+  const V = (x, a, b) => `${x},${a + t / 2 + .3} ${x + t / 2},${a + t} ${x + t / 2},${b - t} ${x},${b - t / 2 - .3} ${x - t / 2},${b - t} ${x - t / 2},${a + t}`;
+  return {w, h, yd, x1, seg: {a: H(ya), g: H(yg), d: H(yd), f: V(x0, ya, yg), b: V(x1, ya, yg), e: V(x0, yg, yd), c: V(x1, yg, yd)}};
+})();
+function seg7(text, n) {
+  const cells = [];
+  for (const ch of String(text)) {
+    if (ch === "." && cells.length && cells[cells.length - 1].d !== undefined) cells[cells.length - 1].dp = true;
+    else if (ch === ":") cells.push({colon: true});
+    else cells.push({d: SEGS[ch] !== undefined ? ch : " "});
+  }
+  while (cells.filter(c => !c.colon).length < n) cells.unshift({d: " "});
+  const G = SEG_GEOM, P = 15, CP = 6, off = "#2c0c0a", on = "#ff3b2f", lit0 = /[^\s:]/.test(String(text));
+  let x = 2, s = "";
+  for (const c of cells) {
+    if (c.colon) {
+      s += `<circle cx="${x + 2.4}" cy="7.5" r="1.4" fill="${lit0 ? on : off}"/><circle cx="${x + 1.6}" cy="15.5" r="1.4" fill="${lit0 ? on : off}"/>`;
+      x += CP; continue;
+    }
+    const lit = SEGS[c.d] || "";
+    s += `<g transform="translate(${x},0) skewX(-7) translate(2.6,0)">`;
+    for (const k of "abcdefg") s += `<polygon points="${G.seg[k]}" fill="${lit.includes(k) ? on : off}"${lit.includes(k) ? ' filter="url(#sglow)"' : ""}/>`;
+    s += `<circle cx="${G.w + .4}" cy="${G.yd}" r="1.3" fill="${c.dp ? on : off}"/></g>`;
+    x += P;
+  }
+  return `<svg viewBox="0 0 ${x + 1} 22"><defs><filter id="sglow" x="-.5" y="-.5" width="2" height="2"><feGaussianBlur stdDeviation=".7" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>${s}</svg>`;
+}
+// The readouts: the window, its digit cells, the formatter of the value ("" = dark)
+const RO = {
+  time: ["ro_time", 5, d => { const s = Math.round(d.link_s || 0), h = Math.min(9, (s / 3600) | 0); return `${h}:${String(((s % 3600) / 60) | 0).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`; }],
+  in: ["ro_in", 7, d => String(Math.min(9999999, d.rx_bytes || 0))],
+  out: ["ro_out", 7, d => String(Math.min(9999999, Math.max(0, (d.tx_text || 0) - (d.unsent || 0) - (d.unacked || 0))))],
+  // characters a minute each way, over the last minute (the TNC's rx_cpm / tx_cpm; owner, 2026-11-22: the total went)
+  rin: ["ro_rin", 5, d => String(Math.min(99999, Math.max(0, d.rx_cpm || 0)))],
+  rout: ["ro_rout", 5, d => String(Math.min(99999, Math.max(0, d.tx_cpm || 0)))],
+  queue: ["ro_queue", 6, d => String(Math.min(999999, (d.unsent || 0) + (d.unacked || 0)))],
+  q: ["ro_q", 3, d => typeof d.quality === "number" && d.quality >= 0 ? String(d.quality) : "---"],
+  afc: ["ro_afc", 4, d => { const v = Math.max(-999, Math.min(999, d.afc_hz || 0)); return (v < 0 ? "-" : "") + Math.abs(v).toFixed(1); }],
+};
+const roLast = {};
+function readouts(d, live) {
+  for (const k in RO) {
+    const [id, n, f] = RO[k], txt = live ? f(d) : k === "time" ? " :  :  " : "";
+    if (roLast[k] !== txt) { roLast[k] = txt; D(id).innerHTML = seg7(txt, n); }
+  }
+}
+readouts({}, false);
+D("ro_tc").innerHTML = seg7("", 4); D("ro_tf").innerHTML = seg7("", 4);
+for (const id of ["ro_snr", "ro_snr2"]) D(id).innerHTML = seg7("", 2);
+for (const id of ["ro_khz", "ro_khz2"]) D(id).innerHTML = seg7("", 6);
+
+// What the receiver hears and how the far end hears us (owner, 2026-11-22; docs/md/gui.md "The front panel"): the
+// received S/N, the radio's frequency, the receive audio level, the far end's last answer. Fixed windows and lamps.
+const FARTIP = {
+  cap: "Far end: how the other station hears us. While we send, it answers each packet with a short control signal; these lamps show what its last answer meant. Dark while we receive, in standby, and when no answer was heard.",
+  ok: "OK (green): the other station received our last packet.",
+  repeat: "Repeat (red): the other station did not get our last packet and asks for it again (or a speed change did not work, and we go back).",
+  faster: "Faster (green): it received the packet and asks for the next speed level up: it hears us well. In P1: 200 Bd.",
+  slower: "Slower (amber): it has been missing packets and asks for a lower speed level; we send the packet again, slower. In P1: 100 Bd.",
+  length: "Long/short (amber): it received the packet and asks us to switch between long and short packets (P2 and P3; the L/S lamp on the TX row shows which we now send)."};
+const AUTIP = "RX audio: the level of what the sound card hears from the radio, for setting it (the radio's audio output or the sound card's capture level). " +
+  "Peak and RMS of the last second, against full scale, not while we transmit.\nLow (amber): RMS under -60 dBFS: turn it up.\nOK (green).\n" +
+  "High (amber): peaks above -3 dBFS: little headroom left: turn it down a little.\nClip (red): samples at full scale in the last 2 s: overloaded, the signal is distorted: turn it down.";
+const SNRTIP = "Received S/N in dB, in a 3 kHz bandwidth: the other station's signal power against the noise, measured in the gaps of the link's cycle over the last 10 s " +
+  "(its packets while we receive, its control signals while we send). --: not measurable (standby, nothing from the other station in the last 10 s, or below about -5 dB). " +
+  "About +-1 dB from 0 to 30 dB against known S/N (docs/md/gui.md). While we send there are no gaps to measure the noise in: the other station's signal is " +
+  "measured against a noise reference kept from standby or from this link's gaps (the radio's AGC changes the noise, so that is an estimate, and it reads low when it comes from standby).";
+const KHZTIP = "The radio's frequency in kHz, read from the rig control used for the PTT (--ptt rig:HOST:PORT, rigctld): every 2 s in standby, never during a call or a link " +
+  "(the last value stays). Read only: nothing is ever set on the radio. ------: no rig control, or no answer from it.";
+// the far-end lamps, twice (one shown): over the tuning bar (two-column panel), and in the readouts row (one column)
+const FARL = [["ok", "fok", "g", "OK"], ["repeat", "frep", "r", "Repeat"], ["faster", "ffast", "g", "Faster"], ["slower", "fslow", "y", "Slower"], ["length", "flen", "y", "Long/short"]];
+for (const sfx of ["", "2"]) {
+  D("fargrp" + sfx).innerHTML = (sfx ? "" : `<span class="pcap" id="farcap" data-tip tabindex="0">Far end</span>`) +
+    FARL.map(([k, id, c, label]) => `<span class="lc" id="LC_${id}${sfx}" data-tip tabindex="0"><i class="led sm" id="L_${id}${sfx}"></i><span class="lt"><span class="${c}">${label}</span></span></span>`).join("");
+  for (const [k, id] of FARL) D("LC_" + id + sfx).title = FARTIP[k] + "\n" + FARTIP.cap;
+}
+D("farcap").title = D("farcap2").title = FARTIP.cap;
+D("snr_ro").title = D("snr_ro2").title = SNRTIP; D("khz_ro").title = D("khz_ro2").title = KHZTIP;
+for (const id of ["alow", "aok", "ahigh"]) D("LC_" + id).title = "Now: not connected.\n" + AUTIP;
+function fmtKhz(f) { return f < 10000 ? f.toFixed(2) : f < 100000 ? f.toFixed(1) : String(Math.min(999999, Math.round(f))); }
+function rxPanel(st, d, linked) {
+  // S/N: during a link, "--" when not measurable (and in standby); dark while offline
+  const snr = !online ? "" : linked && typeof d.snr_db === "number" ? String(Math.max(-9, Math.min(99, Math.round(d.snr_db)))) : "--";
+  if (roLast.snr !== snr) { roLast.snr = snr; D("ro_snr").innerHTML = D("ro_snr2").innerHTML = seg7(snr, 2); }
+  // tooltip only (nothing on the panel moves): where the reading comes from and how old the noise reference is
+  let nowtip = "Now: " + (!online ? "not connected." : !linked ? "no link." : snr === "--" ? "not measurable." : "measured in the gaps of the cycle.");
+  if (online && linked && snr !== "--" && d.snr_src === "ref") nowtip = "Now: measured against the held noise reference.";
+  if (online && typeof d.snr_ref_s === "number") {
+    const a = d.snr_ref_s, age = a < 120 ? `${a} s` : a < 7200 ? `${Math.round(a / 60)} min` : `${Math.round(a / 3600)} h`;
+    nowtip += `\nNoise reference: ${age} old, measured ${d.snr_ref_kind === "gaps" ? "in this link's gaps" : "idle in standby"}` + (a > 900 ? " (too old: not used)." : ".");
+  } else if (online) nowtip += "\nNoise reference: none yet.";
+  for (const id of ["snr_ro", "snr_ro2"]) { const box = D(id); box.title = nowtip + "\n" + SNRTIP; tipRefresh(box); }
+  const f = st.freq_khz, khz = !online ? "" : typeof f === "number" && f > 0 ? fmtKhz(f) : "------";
+  if (roLast.khz !== khz) { roLast.khz = khz; D("ro_khz").innerHTML = D("ro_khz2").innerHTML = seg7(khz, 6); }
+  const a = online && st.audio && typeof st.audio === "object" ? st.audio : null, as = a ? a.state : "";
+  setLed(D("L_alow"), as === "low" ? "yellow" : "off"); setLed(D("L_aok"), as === "ok" ? "green" : "off");
+  setLed(D("L_ahigh"), as === "high" ? "yellow" : as === "clip" ? "red" : "off");
+  const now = !online ? "Now: not connected." : !a || as === "none" ? "Now: not measured yet." :
+    `Now: ${{low: "LOW", ok: "OK", high: "HIGH", clip: "CLIPPING"}[as] || as}, peak ${a.peak_dbfs.toFixed(1)} dBFS, RMS ${a.rms_dbfs.toFixed(1)} dBFS.`;
+  for (const id of ["alow", "aok", "ahigh"]) { const box = D("LC_" + id); box.title = now + "\n" + AUTIP; tipRefresh(box); }
+  const far = online && linked && Array.isArray(d.far) ? d.far : [], col = {ok: "green", repeat: "red", faster: "green", slower: "yellow", length: "yellow"};
+  for (const [k, id] of FARL) for (const sfx of ["", "2"]) setLed(D("L_" + id + sfx), far.includes(k) ? col[k] : "off");
+}
+
+// The two LED clocks (owner, 2026-11-13): UTC and the browser's local time, HH:MM:SS, 24 hour. Drawn here from
+// the browser's clock (no WebSocket traffic, and they run while the connection is down). "Local" is the
+// time zone of the browser, i.e. the operator's, which is not the station's when the GUI is opened remotely.
+(function () {
+  let zone = "";
+  try { zone = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (e) {}
+  const p2 = v => String(v).padStart(2, "0");
+  let lastU = "", lastL = "";
+  function clocks() {
+    const d = new Date();
+    const u = `${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}:${p2(d.getUTCSeconds())}`;
+    const l = `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
+    if (u !== lastU) { lastU = u; D("ro_utc").innerHTML = seg7(u, 6); }
+    if (l !== lastL) { lastL = l; D("ro_loc").innerHTML = seg7(l, 6); }
+  }
+  function loop() { clocks(); setTimeout(loop, 1000 - (Date.now() % 1000) + 8); }   // on the second
+  const off = -new Date().getTimezoneOffset(), sg = off < 0 ? "-" : "+", ao = Math.abs(off);
+  const utcoff = "UTC" + sg + p2((ao / 60) | 0) + ":" + p2(ao % 60);
+  D("loc_ro").title = "Local time of this browser" + (zone ? " (" + zone + ", " + utcoff + ")" : " (" + utcoff + ")") + ", 24-hour";
+  D("ro_utc").parentNode.title = "Coordinated Universal Time, 24-hour";
+  document.addEventListener("visibilitychange", clocks);
+  loop();
+})();
+
+// The Disconnect button: as "D" (the JSON API's disconnect, the same path as the terminal's D);
+// pressed again while that disconnect is in progress (its lamp lit, or within 2 s of the
+// first press), "DD" (abort). With no link and no call it does nothing. The cap moves while held.
+let discAt = 0;
+const pb = D("pbdisc");
+const pbUp = () => pb.classList.remove("down");
+pb.addEventListener("pointerdown", e => { pb.classList.add("down"); try { pb.setPointerCapture(e.pointerId); } catch (x) {} });
+["pointerup", "pointercancel", "lostpointercapture", "blur"].forEach(ev => pb.addEventListener(ev, pbUp));
+pb.addEventListener("click", () => {
+  const d = (last && last.detail) || {};
+  if (!online || !(d.state === "connected" || d.state === "calling")) return;
+  if (d.qrt || Date.now() - discAt < 2000) { send({type: "abort"}); addText("me", "DD\n"); discAt = 0; }
+  else { send({type: "disconnect"}); addText("me", "D\n"); discAt = Date.now(); }
+});
+
+// ---------------------------------------------------------------- cards
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const fmtB = n => n >= 1e6 ? (n / 1e6).toFixed(2) + " MB" : n >= 1e4 ? (n / 1e3).toFixed(1) + " kB" : (n | 0) + " B";
+const fmtT = s => { s = Math.round(s || 0); return s >= 3600 ? `${(s / 3600) | 0}h ${String(((s % 3600) / 60) | 0).padStart(2, "0")}m` : s >= 60 ? `${(s / 60) | 0}m ${String(s % 60).padStart(2, "0")}s` : `${s}s`; };
+const kv = rows => `<div class="kv">${rows.map(([k, v]) => `<div class="k">${esc(k)}</div><div class="v">${v}</div>`).join("")}</div>`;
+// Decode margin and back-off (the design notes 2, 3): how long before our answer was due each
+// received packet's decode was done, this link. Under 8 ms the P3 receiver stops climbing;
+// a late one (the packet counts as failed) caps the level one below.
+function decodeCard(d) {
+  // always the same five rows (a dash when there is no link or nothing measured), so the page below does not move
+  const live = "margin_ms" in d, dash = '<span class="muted">—</span>';
+  const ms = v => v === null || v === undefined ? "—" : `${v.toFixed(0)} ms`;
+  const col = v => v === null || v === undefined ? "" : v < 0 ? "#ff8a80" : v < 8 ? "#ffd27a" : "#9ff5b9";
+  const late = (d.late || 0) + (d.late_sl1 ? ` <span class="muted">+ ${d.late_sl1} SL1 tries</span>` : "") + (d.late_bk ? ` <span class="muted">+ ${d.late_bk} break-ins</span>` : "");
+  return `<div class="card" id="decode_card" title="decode margin: time left before our answer was due when each received packet's decode finished (late: not done in time, the packet counted as failed); shown while a link is up"><h2>Decoding <span>this link</span></h2>${kv(!live ? [["Margin", dash], ["Median", dash], ["Lowest", dash], ["Late", dash], ["Back-off", dash]] : [
+    ["Margin", d.margin_ms === -1 ? '<span style="color:#ff8a80">late</span>' : `<span style="color:${col(d.margin_ms)}">${ms(d.margin_ms)}</span>`],
+    ["Median", `<span style="color:${col(d.margin_med)}">${ms(d.margin_med)}</span> <span class="muted">(last 32)</span>`],
+    ["Lowest", `<span style="color:${col(d.margin_min)}">${ms(d.margin_min)}</span>`],
+    ["Late", (d.late || d.late_sl1 || d.late_bk) ? `<span style="color:#ff8a80">${late}</span>` : "0"],
+    ["Back-off", d.p3_cap < 6 ? `<span style="color:#ffd27a">not above SL${d.p3_cap}</span> <span class="muted">(the computer)</span>` : "none"]])}</div>`;
+}
+
+// The computer (CPU health, the panel's "cpu"): the reason and what to do, here rather than on the panel face
+function cpuCard(st) {
+  // always the same four rows (a dash when there is nothing to say), so the page below does not move
+  const c = online && st && st.cpu && typeof st.cpu === "object" ? st.cpu : null, dash = '<span class="muted">—</span>';
+  const col = !c ? "" : c.state === "starved" ? "#ff8a80" : c.state === "busy" ? "#ffd27a" : "#9ff5b9";
+  const ap = c && Array.isArray(c.applies) && c.applies.length ? c.applies.join("; ") : "";
+  const bad = c && (c.state === "busy" || c.state === "starved");
+  const fb = c && Array.isArray(c.fallbacks) && c.fallbacks.length ? c.fallbacks.join("; ") : "";
+  return `<div class="card" title="is this computer keeping up with the audio and the decodes (with CPUadapt on, Signum leaves CPU-bound extras out while it is not: Fallback)"><h2>Computer <span>CPU health</span></h2>${kv([
+    ["State", c ? `<span style="color:${col}">${esc(c.state === "ok" ? "OK" : c.state)}</span>` : '<span class="muted">not known</span>'],
+    ["Why", bad && c.reason ? esc(c.reason) : dash],
+    ["Here", ap ? esc(ap) : dash],
+    ["What to do", bad && c.advice ? esc(c.advice) : dash],
+    ["Fallback", fb ? esc(fb) : dash]])}</div>`;
+}
+
+// The drive (the radio's ALC, src/alc_warn.hpp): the panel's "alc" {state off|n/a|ok|warn, max, bursts, over, limit, mode, level, gain};
+// always the same four rows, so the page below does not move
+function alcCard(st) {
+  const a = online && st && st.alc && typeof st.alc === "object" ? st.alc : null, dash = '<span class="muted">—</span>';
+  const col = !a ? "" : a.state === "warn" ? "#ff8a80" : a.state === "ok" ? "#9ff5b9" : "";
+  const word = !a ? '<span class="muted">not known</span>' : a.state === "warn" ? "WARNING: the ALC is acting" : a.state === "ok" ? "OK" : a.state === "off" ? "off (--alc-warn off)" : "not available";
+  const read = a && a.bursts > 0;
+  return `<div class="card" title="the radio's ALC meter, read through rigctld while we send on a P2/P3 link (ALCwarn). A drive that makes the ALC squash the PSK peaks can make the other station answer P (repeat). Signum only warns; it never changes the TX gain or the power."><h2>Drive (ALC) <span>this link</span></h2>${kv([
+    ["State", `<span style="color:${col}">${word}</span>`],
+    ["Highest", read ? a.max.toFixed(2) + ` <span class="muted">(warning at ${a.limit.toFixed(2)})</span>` : dash],
+    ["Bursts over", read ? `${a.over} of ${a.bursts}` : dash],
+    ["Worst at", a && a.state === "warn" ? esc(`P${a.mode} L${a.level}, ${a.gain >= 0 ? "+" : ""}${a.gain.toFixed(1)} dB`) + ' <span class="muted">(lower the drive)</span>' : dash]])}</div>`;
+}
+
+// ---------------------------------------------------------------- render
+let last = null, online = false;
+function tuningRow(st, d) {
+  // the TNC's own indicator: tune_led (0..14, 7 = no offset, -1 = none) and freq_led ("red" past 10 Hz)
+  if (typeof st.tune_led === "number") {
+    const k = online ? st.tune_led : -1, green = st.freq_led !== "red";
+    segs.forEach((s, i) => { s.classList.toggle("on", i === k); s.classList.toggle("g", i === k && green); });
+    return;
+  }
+  const af = d.afc_hz, on = online && d.state && d.state !== "standby" && typeof af === "number";
+  const k = on ? Math.max(0, Math.min(14, Math.round(7 + af / 5))) : -1;
+  const green = on && Math.abs(af) <= 10;
+  segs.forEach((s, i) => { s.classList.toggle("on", i === k); s.classList.toggle("g", i === k && green); });
+}
+// The display's two lines: the TNC's text ("---STBY---", "CALL N0BBB", "P3 N0BBB"), and who
+// called: "OUTGOING" (we called) / "INCOMING" (they called), our own call in standby.
+function displayLines(st, d) {
+  const role = d.state === "connected" || d.state === "calling" ? (d.role === "caller" ? "OUTGOING" : d.role === "callee" ? "INCOMING" : "") : (d.mycall || "");
+  return [st.text || "", role];
+}
+function cpuTemp(st) {
+  const c = st && typeof st.cpu_temp_c === "number" ? st.cpu_temp_c : null;
+  const tc = !online || !st ? "" : c === null ? " --.-" : c.toFixed(1);
+  const tf = !online || !st ? "" : c === null ? "---.-" : (c * 9 / 5 + 32).toFixed(1);
+  if (roLast.tc !== tc) { roLast.tc = tc; D("ro_tc").innerHTML = seg7(tc, 5); }
+  if (roLast.tf !== tf) { roLast.tf = tf; D("ro_tf").innerHTML = seg7(tf, 5); }
+  setLed(D("L_hot"), online && c !== null && c >= 80 ? "red" : online && c !== null && c >= 70 ? "yellow" : "off");
+}
+// CPU health: the panel's "cpu" {state ok|busy|starved, reason, applies[], advice}; information only
+function cpuHealth(st) {
+  const c = online && st && st.cpu && typeof st.cpu === "object" ? st.cpu : null, state = c ? c.state : "";
+  setLed(D("L_cpu"), state === "ok" ? "green" : state === "busy" ? "yellow" : state === "starved" ? "red" : "off");
+  D("L_cpu").classList.toggle("blink", state === "starved");
+  const bad = state === "busy" || state === "starved", ap = c && Array.isArray(c.applies) && c.applies.length ? c.applies.join("; ") : "";
+  const fb = c && Array.isArray(c.fallbacks) && c.fallbacks.length ? " Fallback (CPUadapt): " + c.fallbacks.join("; ") + "." : "";
+  D("cpucap").textContent = bad ? "CPU " + state : "Computer";
+  D("cpugrp").title = !c ? "CPU: not known (no real-time audio, or not connected)." :
+    state === "ok" ? "CPU: keeping up." + (ap ? " Note: " + ap + "." : "") + fb :
+    "CPU " + state + ": " + (c.reason || "") + "." + (ap ? " Applies here: " + ap + "." : "") + " What to do: " + (c.advice || "") + "." + fb;
+  tipRefresh(D("cpugrp"));
+}
+function render(st) {
+  last = st;
+  cpuTemp(st);
+  cpuHealth(st);
+  $("#clock").textContent = "t " + (st.t || 0).toFixed(1) + " s";
+  const d = st.detail || {};
+  if (d.mycall) { setTitle(d.mycall); document.title = d.mycall + " · Signum"; }
+  drawDots(displayLines(st, d).map(textDots), online);
+  const named = st.leds || {};
+  const on = c => online ? c : "off", linked = d.state === "connected", calling = d.state === "calling";
+  setLed(D("L_busy"), on(st.busy === "busy" ? "red" : st.busy === "free" ? "green" : "off"));
+  setLed(D("L_conn"), on(linked || (!d.state && named["Connected/Mail"] === "yellow") ? "green" : calling ? "red" : "off"));
+  setLed(D("L_send"), on(named["Send/CHO"]));
+  // Traffic/Error during a link only: in standby the reference unit shows channel busy on it, the Free/Busy lamp's job here
+  setLed(D("L_traf"), on(linked || !d.state ? named["Traffic/Error"] : "off"));
+  // TX follows the transmitter (detail.ptt); Send/CHO is the protocol state
+  const ptt = "ptt" in d ? !!d.ptt : named["Send/CHO"] === "green" || named["Send/CHO"] === "yellow";
+  setLed(D("L_tx"), on(ptt ? "red" : "off"));
+  setLed(D("L_qrt"), on(d.qrt ? "yellow" : "off"));
+  const m = st.mode || {};
+  for (const [p, lv] of MODES) {
+    setLed(D("M" + p), on(m.plevel === p ? "green" : "off"));
+    // older Signums send `level` only: the same level on both rows
+    const tx = "tx" in m ? m.tx : m.level, rx = "rx" in m ? m.rx : m.level;
+    lv.forEach((_, k) => {
+      setLed(D(`MT${p}_${k + 1}`), on(m.plevel === p && tx === k + 1 ? "yellow" : "off"));
+      setLed(D(`MR${p}_${k + 1}`), on(m.plevel === p && rx === k + 1 ? "yellow" : "off"));
+    });
+  }
+  // long or short packets each way: P2 and P3 links only (P1 and set-up: dark)
+  const ls = (lng) => linked && (m.plevel === 2 || m.plevel === 3) && "tx_long" in m ? (lng ? "green" : "red") : "off";
+  setLed(D("MT_ls"), on(ls(m.tx_long))); setLed(D("MR_ls"), on(ls(m.rx_long)));
+  peerPanel(online ? st.peer : null);
+  tuningRow(st, d);
+  readouts(d, online && linked);
+  rxPanel(st, d, linked);
+  $("#cards_rt").innerHTML = cpuCard(st) + decodeCard(d) + alcCard(st);
+  if (crBuilt && cr) crSendKey();
+}
+
+// The Peer lamps (TODO t; docs/md/gui.md "The front panel"): Signum (green) = the other station sent Signum's
+// peer marker or its encryption record on this link; Other (amber) = with the marker on here, no marker in
+// its first 64 characters (an inference: the reference unit, another P1/P2/P3 modem, an older Signum or one
+// with its marker off). Both dark in standby, on P1 and until known. p: the panel's "peer" (null: offline).
+const PEERLEGEND = {
+  fer: "Signum (green): the other station is a Signum: it sent Signum's peer marker, or its encryption record, on this link. Dark: standby, a P1 link, not known yet, or another modem.",
+  oth: "Other (amber): no Signum marker in the other station's first 64 characters: most likely the reference unit or another P1/P2/P3 modem. Inferred, not proven: an older Signum, or one with its marker off, looks the same. Lit only with the peer marker on here (PEERmark 1, the Configure tab). Dark: standby, P1, not known yet, or a Signum."};
+function peerLampStates(p) {                      // {fer, oth}: [colour, text]; the TUI does the same (tui/signum-tui peer_lamps)
+  if (!p) return {fer: ["off", "Not connected."], oth: ["off", "Not connected."]};
+  const lamp = p.lamp || "off", link = p.link || 0, mk = p.marker ? "on" : "off";
+  const now = !link ? "Standby: no link." : link === 1 ? "A P1 link: P1 has no room for the marker (never sent on P1), so the other station is not known."
+    : lamp === "signum" ? `The other station is a Signum${p.version ? " " + p.version : ""}.`
+    : lamp === "other" ? "No Signum marker in the other station's first 64 characters: not a Signum with its marker on (probably the reference unit or another modem)."
+    : p.marker ? "Not known yet: the other station has sent fewer than 64 characters, and no marker."
+    : "Not known: the peer marker is off here, so only an encrypted link or the other station's own marker shows a Signum.";
+  const tail = ` Peer marker here: ${mk}.`;
+  return {fer: [lamp === "signum" && link >= 2 ? "green" : "off", now + tail], oth: [lamp === "other" && link >= 2 ? "yellow" : "off", now + tail]};
+}
+peerPanel(null);                                  // the tooltips from the start (hoisted: defined below)
+function peerPanel(p) {
+  const s = peerLampStates(p);
+  for (const [k, id] of [["fer", "pfer"], ["oth", "poth"]]) {
+    const [col, text] = s[k], box = D("LC_" + id);
+    setLed(D("L_" + id), col);
+    box.title = text + "\n" + PEERLEGEND[k]; tipRefresh(box);
+  }
+}
+
+// ---------------------------------------------------------------- WebSocket
+let ws = null, nextId = 1, backoff = 500, termOpen = false;
+const send = o => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(Object.assign({id: nextId++}, o))); };
+const paramReqs = new Map();                      // id -> parameter key (answers to "NAME" queries), "_set": a setting
+const quiet = o => { paramReqs.set(nextId, "_quiet"); send(o); };   // a request whose answer is not shown
+function connect() {
+  const url = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/" + location.search;
+  ws = new WebSocket(url);
+  ws.onopen = () => { online = true; backoff = 500; $("#conn").textContent = "connected"; $("#conn").className = "pill ok"; if (last) render(last); if (crBuilt) crCard(); };
+  ws.onclose = () => {
+    online = false; $("#conn").textContent = "disconnected · retrying"; $("#conn").className = "pill bad";
+    if (last) render(last); else drawDots([], false);
+    if (crBuilt) crCard();
+    wfSent = null;
+    setTimeout(connect, backoff); backoff = Math.min(8000, backoff * 2);
+  };
+  ws.onmessage = ev => {
+    let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+    if (m.type === "panel" && m.panel) render(m.panel);
+    else if (m.type === "rx") addText("", m.text);
+    else if (m.type === "monitor") addText("mon", (m.who ? `[listen] ${m.who}> ` : "[listen] *** ") + m.text + "\n");
+    else if (m.type === "link") { addText("ev", `\n[${m.up ? "link up" : "link down"}: ${m.call}]\n`); if ($("#linksbox").open) send({type: "links", limit: 100}); }
+    else if (m.type === "link_logged") { if ($("#linksbox").open) send({type: "links", limit: 100}); }
+    else if (m.type === "result") {
+      if (paramReqs.has(m.id)) { paramAnswer(paramReqs.get(m.id), m.text, m.ok); paramReqs.delete(m.id); }
+      else if (m.text) addText("res", m.text.endsWith("\n") ? m.text : m.text + "\n");
+    }
+    else if (m.type === "error") addText("ev", `[error: ${m.error}]\n`);
+    else if (m.type === "about") { if (m.version) { makerText = m.version.split(" (")[0]; setBrand(); } showAbout(m); }
+    else if (m.type === "links") showLinks(m);
+    else if (m.type === "log") logLine(m);
+    else if (m.type === "hello" && m.auth === "required") askLogin();
+    else if (m.type === "hello") {
+      if (m.mycall) setTitle(m.mycall);
+      crBuiltSet(m.crypto === true);              // false (a build without encryption): no encryption control anywhere
+      quiet({type: "subscribe", streams: ["panel", "rx", "link", "event", "config", "monitor", "log"].concat(crBuilt ? ["crypto"] : [])});
+      quiet({type: "log_get"}); send({type: "about"});
+      if (termOpen) send({type: "term_open"});
+      wfSent = null; wfSync();
+      if ($("#linksbox").open) send({type: "links", limit: 100});
+      paramsQuery();
+    }
+    else if (m.type === "config") showConfig(m);
+    else if (m.type === "crypto") { if (crBuilt) showCrypto(m.crypto); }
+    else if (m.type === "crypto_result") { const f = crPend.get(m.id); crPend.delete(m.id); if (f) f(m); }
+    else if (m.type === "startup") showStartup(m);
+    else if (m.type === "ic7300") rigMsg(m);
+    else if (m.type === "term") termOut(m.data);
+    else if (m.type === "waterfall") wfRow(m);
+    else if (m.type === "waterfall_info") wfInfo = m;
+  };
+}
+function submit() {
+  const line = $("#line").value, mode = $("#mode").value;
+  if (!line || !ws || ws.readyState !== 1) return;
+  if (mode === "send") { send({type: "send", text: line + "\r"}); addText("me", line + "\n"); }
+  else { send({type: "command", line}); addText("me", "cmd: " + line + "\n"); }
+  $("#line").value = "";
+}
+$("#go").onclick = submit;
+$("#line").addEventListener("keydown", e => { if (e.key === "Enter") submit(); });
+$("#bconnect").onclick = () => { const c = $("#callto").value.trim().toUpperCase(); if (c) { send({type: "connect", call: c}); addText("me", "C " + c + "\n"); } };
+$("#callto").addEventListener("keydown", e => { if (e.key === "Enter") $("#bconnect").click(); });
+
+// ---------------------------------------------------------------- tabs
+document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
+  document.querySelectorAll(".tab").forEach(x => x.classList.toggle("on", x === t));
+  document.querySelectorAll(".pane").forEach(x => x.classList.toggle("on", x.id === "p-" + t.dataset.p));
+  if (t.dataset.p === "terminal") {
+    if (!termOpen) send({type: "term_open"});
+    termOpen = true; $("#tty").focus();
+  }
+  if (t.dataset.p === "config") paramsQuery();
+  try { localStorage.setItem("tab", t.dataset.p); } catch (e) {}
+});
+
+// ---------------------------------------------------------------- about, login (--ws-auth)
+$("#aboutbtn").onclick = () => { $("#about").classList.add("on"); send({type: "about"}); };
+$("#ab_close").onclick = () => $("#about").classList.remove("on");
+$("#about").onclick = e => { if (e.target.id === "about") $("#about").classList.remove("on"); };
+function showAbout(m) { $("#ab_build").innerHTML = kv([["Version", esc(m.version || "—")], ["Built", esc(m.built || "—")]]); }
+function askLogin() { $("#login").classList.add("on"); $("#lu").focus(); }
+$("#lgo").onclick = () => {
+  ws.send(JSON.stringify({type: "auth", user: $("#lu").value, pass: $("#lp").value}));
+  $("#login").classList.remove("on");
+};
+$("#lp").addEventListener("keydown", e => { if (e.key === "Enter") $("#lgo").click(); });
+
+// ---------------------------------------------------------------- the IC-7300 set-up (src/radio/ic7300.hpp)
+// Set up: detect (read only) -> the radio's settings and what changes -> the warning -> the checkbox ->
+// Reconfigure (ic7300_setup, understood: true) -> each step -> the backup file and the settings written.
+// Restore: the backup files -> the warning -> the checkbox -> Restore (ic7300_restore).
+let rigMode = "setup", rigProfile = "signum", rigRadios = [], rigSerial = "", rigFile = "", rigRunning = false;
+const rigReq = o => { const id = nextId; paramReqs.set(id, "_rig"); send(o); };
+function rigReset() {
+  rigRadios = []; rigSerial = ""; rigFile = ""; rigRunning = false;
+  for (const id of ["rig_pick", "rig_plan", "rig_steps"]) $("#" + id).innerHTML = "";
+  $("#rig_warn").style.display = "none"; $("#rig_ackrow").style.display = "none"; $("#rig_b0row").style.display = "none";
+  $("#rig_ack").checked = false; $("#rig_b0").checked = false; $("#rig_bk").style.display = "none";
+  rigButtons();
+}
+function rigButtons() {
+  const sel = rigMode === "setup" ? rigRadios.find(r => r.serial === rigSerial) : null;
+  const ready = rigMode === "setup" ? !!sel && (sel.answered || $("#rig_b0").checked) && !sel.error.includes("transmitting") : !!rigFile;
+  $("#rig_go").disabled = rigRunning || !ready || !$("#rig_ack").checked;
+  $("#rig_bk").disabled = rigRunning || !sel || !sel.answered;
+  $("#rig_again").disabled = rigRunning;
+}
+function rigOpen(mode, profile) {
+  rigMode = mode; rigProfile = profile || "signum"; rigReset();
+  $("#rig_title").textContent = mode === "setup" ? (rigProfile === "external" ? "Set up an Icom IC-7300 for an external modem (ACC socket)" : "Set up an Icom IC-7300") : "Restore an IC-7300's settings";
+  $("#rig_go").textContent = mode === "setup" ? "Reconfigure the radio" : "Restore these settings";
+  $("#rig").classList.add("on");
+  rigLook();
+}
+function rigLook() {
+  if (rigMode === "setup") { $("#rig_status").textContent = "Looking for IC-7300s on USB and reading their settings (no changes)…"; rigReq({type: "ic7300_detect", profile: rigProfile}); }
+  else { $("#rig_status").textContent = "Backups of IC-7300 settings:"; rigReq({type: "ic7300_backups"}); }
+}
+function rigWarnShow(text) {
+  $("#rig_warn").innerHTML = "<b>WARNING: THIS RECONFIGURES YOUR RADIO.</b>\n" + esc(text);
+  $("#rig_warn").style.display = ""; $("#rig_ackrow").style.display = "";
+}
+function rigShowRadio() {
+  const r = rigRadios.find(x => x.serial === rigSerial);
+  if (!r) { $("#rig_plan").innerHTML = ""; return; }
+  const head = `<div class="kv" style="margin:6px 0"><div class="k">Serial number</div><div class="v">${esc(r.serial)}</div>` +
+    `<div class="k">CI-V / keying port</div><div class="v wrap">${esc(r.port)}</div>` +
+    `<div class="k">Sound card</div><div class="v">${esc(r.alsa || "not found on the radio's USB hub")}</div>` +
+    `<div class="k">CI-V</div><div class="v wrap">${r.answered ? esc(`address ${r.addr.toString(16).toUpperCase().padStart(2, "0")}h, ${r.baud ? r.baud + " Bd" : "rate not measured"}${r.how ? " (" + r.how + ")" : ""}`) : esc(r.error || "no answer")}</div>` +
+    (r.users.length ? `<div class="k">Port also open by</div><div class="v wrap">${esc(r.users.join(", "))}</div>` : "") + `</div>`;
+  const rows = r.rows.map(x => `<tr><td>${esc(x.name)}</td><td>${esc(x.now)}</td><td class="${x.change ? "chg" : ""}">${esc(x.change ? x.new : x.new === "(recorded only)" || x.new === "(left as it is)" ? x.new : "unchanged")}</td></tr>`).join("");
+  $("#rig_plan").innerHTML = head + (r.rows.length ? `<div class="saved">${r.changes} setting(s) change; ${rigProfile === "external" ? "Signum's settings file is not touched, and Signum cannot key this radio until you press Set up my IC-7300… again" : "afterwards the settings file gets " + esc(r.settings.map(s => s[0] + " = " + s[1]).join(", "))}.</div>` +
+    `<div class="linkswrap" style="max-height:260px;overflow:auto"><table class="pk rigtab"><tr><th>Setting</th><th>Now</th><th>${rigProfile === "external" ? "External modem" : "Signum sets"}</th></tr>${rows}</table></div>` : "");
+  $("#rig_b0row").style.display = r.needs_b0_exit ? "" : "none";
+  $("#rig_bk").style.display = "";
+  if (r.answered || r.needs_b0_exit) rigWarnShow(r.warning || `Signum is about to RECONFIGURE this IC-7300 (serial ${r.serial}).`);
+  rigButtons();
+}
+function rigMsg(m) {
+  if (m.event === "detect") {
+    rigRadios = m.radios || [];
+    if (!rigRadios.length) { $("#rig_status").textContent = "No IC-7300 found: is it switched on and its USB cable plugged in? (Linux: /dev/serial/by-id/ shows no IC-7300 port)"; return; }
+    $("#rig_status").textContent = rigRadios.length > 1 ? `${rigRadios.length} IC-7300s found: choose one by its serial number.` : "IC-7300 found.";
+    if (rigRadios.length === 1) rigSerial = rigRadios[0].serial;
+    $("#rig_pick").innerHTML = rigRadios.length > 1 ? `<div class="seg" id="rig_seg">${rigRadios.map(r => `<button data-v="${esc(r.serial)}">${esc(r.serial)}</button>`).join("")}</div>` : "";
+    document.querySelectorAll("#rig_seg button").forEach(b => b.onclick = () => { rigSerial = b.dataset.v; document.querySelectorAll("#rig_seg button").forEach(x => x.classList.toggle("on", x === b)); rigShowRadio(); });
+    rigShowRadio();
+  } else if (m.event === "backups") {
+    const f = m.files || [];
+    $("#rig_status").textContent = f.length ? `Backups in ${m.dir}: choose one (newest first).` : `No backups in ${m.dir}.`;
+    $("#rig_pick").innerHTML = f.map((x, k) => `<label class="chk" style="margin-top:0"><input type="radio" name="rigf" value="${esc(x.path)}"> ${esc(x.path.split("/").pop())} · radio ${esc(x.serial || "?")} · ${x.items} settings</label>`).join("");
+    document.querySelectorAll("input[name=rigf]").forEach(i => i.onchange = () => {
+      rigFile = i.value;
+      const x = f.find(y => y.path === rigFile);
+      rigWarnShow(`Signum is about to write the settings in\n${rigFile}\nback to IC-7300 serial ${x ? x.serial : "?"}. The radio's present values of those settings will be LOST from the radio.\n${x && x.rf_power ? "This backup is from Set IC-7300 power: it puts RF POWER back too. It does not change the frequency or transmit." : "It does NOT change the transmit power or the frequency, and it does not transmit."}`);
+      rigButtons();
+    });
+  } else if (m.event === "step" && rigPower) {
+    $("#ic73_pwout").textContent = `[${m.stage}] ${m.text}`;
+  } else if (m.event === "done" && m.op === "power") {
+    rigPower = false;
+    $("#ic73_pw").disabled = false;
+    const o = $("#ic73_pwout");
+    o.textContent = (m.ok ? `Done: RF POWER ${m.before}/255 -> ${m.after}/255 (read back).\n` : "Not set: nothing changed on the radio.\n") + (m.lines || []).join("\n") +
+      (m.lines && m.lines.length ? "" : (m.error || "")) +
+      (m.tx_gain !== undefined ? `\nTX gain ${m.tx_gain_before.toFixed(1)} -> ${m.tx_gain.toFixed(1)} dB now; settings file: ${m.tx_gain_saved ? "NOT saved (" + m.tx_gain_saved + ")" : "tx-gain = " + m.tx_gain}` : "") +
+      (m.backup ? `\nBackup (Restore puts RF POWER and the USB MOD Level back): ${m.backup}` : "");
+    o.style.whiteSpace = "pre-wrap";
+  } else if (m.event === "step") {
+    $("#rig_steps").insertAdjacentHTML("beforeend", `<div class="${m.ok > 0 ? "ok" : m.ok === 0 ? "bad" : "info"}">${m.ok > 0 ? "ok  " : m.ok === 0 ? "FAIL" : "    "} [${esc(m.stage)}] ${esc(m.text)}</div>`);
+    $("#rig_steps").scrollTop = 1e9;
+  } else if (m.event === "done") {
+    rigRunning = false;
+    if (m.op === "detect") return rigButtons();
+    let t = m.ok ? (m.op === "setup" ? (m.profile === "external" ? "Done: the radio is set up for an external modem on its ACC socket. Signum cannot key it now; to use Signum again press Set up my IC-7300…." : "Done: the radio is set up for Signum.") : m.op === "restore" ? "Done: the radio's settings are back as in the backup." : "Backup saved.") : "Not done: " + (m.error || "failed");
+    if (m.written !== undefined) t += ` ${m.written} written, ${m.verified} read back as wanted, ${m.failed} failed.`;
+    if (m.backup) t += ` Backup of the settings before: ${m.backup}`;
+    if (m.settings) t += " Settings file: " + m.settings.map(s => `${s[0]} = ${s[1]}${s[2] ? " (NOT written: " + s[2] + ")" : ""}`).join(", ") + ". They apply at the next start of Signum.";
+    $("#rig_status").textContent = t;
+    rigButtons();
+  }
+}
+$("#ic73_setup").onclick = () => rigOpen("setup");
+$("#ic73_ext").onclick = () => rigOpen("setup", "external");
+$("#ic73_restore").onclick = () => rigOpen("restore");
+let rigPower = false;
+$("#ic73_pw").onclick = () => {
+  const w = parseFloat($("#ic73_w").value);
+  if (!(w >= 1 && w <= 100)) { $("#ic73_pwout").textContent = "Give the wanted peak power: 1-100 W."; return; }
+  rigPower = true; $("#ic73_pw").disabled = true;
+  $("#ic73_pwout").textContent = `Reading the radio and working out RF POWER for ${w} W peaks (no transmission)…`;
+  rigReq({type: "ic7300_power", watts: w});
+};
+$("#rig_close").onclick = () => $("#rig").classList.remove("on");
+$("#rig_again").onclick = () => { const m = rigMode; rigOpen(m, rigProfile); };
+$("#rig_ack").onchange = rigButtons;
+$("#rig_b0").onchange = rigButtons;
+$("#rig_go").onclick = () => {
+  if (!$("#rig_ack").checked) return;
+  rigRunning = true; rigButtons(); $("#rig_steps").innerHTML = "";
+  $("#rig_status").textContent = rigMode === "setup" ? "Reconfiguring the radio…" : "Restoring…";
+  if (rigMode === "setup") rigReq({type: "ic7300_setup", profile: rigProfile, serial: rigSerial, understood: true, allow_b0_exit: $("#rig_b0").checked});
+  else rigReq({type: "ic7300_restore", file: rigFile, understood: true});
+};
+$("#rig_bk").onclick = () => { rigRunning = true; rigButtons(); $("#rig_status").textContent = "Saving a backup (no changes)…"; rigReq({type: "ic7300_backup", profile: rigProfile, serial: rigSerial}); };
+
+// ---------------------------------------------------------------- configuration
+// Every user option is on this tab (the option list, --help and Help).
+// Each field carries data-opt: the command-line options and terminal commands it stands for.
+// Live settings come as "config" (settings_json); a key the station reports is set with config_set,
+// any other parameter with its terminal command (e.g. "MAXUp 5"), its value read by asking the command.
+// Next-start settings come as "startup" (the settings file) and are written with startup_set.
+const PARAMS = [   // key, terminal command, label, min, max, hint (defaults: the reference unit's), data-opt
+  ["maxerr", "MAXErr", "Timeout (MAXErr)", 30, 255, "bad cycles before the link is given up, 255 = never; default 70", "MAXError"],
+  ["txdelay", "TXDelay", "TX delay (TXDelay)", 1, 31, "× 5 ms of FSK lead-in after keying; default 4 (20 ms)", "TXDelay"],
+  ["pska", "PSKAmpl", "PSK level (PSKAmpl)", 10, 1000, "output level, mV peak-to-peak on the reference unit; default 140", "PSKAmpl"],
+  ["tx_gain", "", "TX gain (dB)", -40, 20, "on top of PSKAmpl, -40 to 20; default 0. Signum's own (--tx-gain)", "--tx-gain"],
+  ["max_key", "", "Key-down watchdog (s)", 1, 600, "the key is dropped after this long keyed without a break, 1-600; default 90 (--max-key)", "--max-key"],
+  ["pdtimer", "PDTimer", "Auto break-in hold (PDTimer)", 2, 30, "with auto break-in on: s after the other station broke in before ours may, 2-30; default 12", "--pdtimer PDTimer"],
+];
+const STATIONP = [
+  ["cmsg", "CMsg", "Connect text (CMsg)", 0, 2, "sent when we are called and the link is P3; 0 = none; default 1", "CMsg"],
+];
+const LISTENP = [
+  ["urep", "", "Unproto repetitions", 1, 5, "how often each unproto packet is sent (U *n), 1-5; default 2", "Unproto"],
+];
+const HOSTP = [
+  ["hostch", "PTChn", "Host-mode channel (PTChn)", 1, 31, "the modem's channel in host mode; default 4 (Pat sets 31)", "PTChn"],
+  ["status", "STatus", "Status reports (STatus)", 0, 2, "status byte reporting; 2 = sent by itself on every change; default 1", "STatus"],
+  ["escchr", "ESCchr", "Escape key (ESCchr)", 1, 127, "ASCII code of the converse-mode command key; default 27 (Esc)", "ESCchr"],
+  ["qrtchr", "QRTChr", "QRT key (QRTChr)", 1, 127, "ASCII code of the orderly-disconnect key; default 4 (Ctrl-D)", "QRTChr"],
+  ["bkchr", "BKchr", "Break-in key (BKchr)", 1, 127, "ASCII code of the break-in key; default 25 (Ctrl-Y)", "BKchr"],
+  ["chochr", "CHOchr", "Changeover key (CHOchr)", 1, 127, "ASCII code of the changeover key; default 25 (Ctrl-Y)", "CHOchr"],
+];
+const COMPAT = [
+  ["maxup", "MAXUp", "Speed up (MAXUp)", 2, 30, "kept and reported; Signum follows the reference firmware's own speed rules; default 4", "MAXUp"],
+  ["maxdown", "MAXDown", "Speed down (MAXDown)", 2, 30, "kept and reported; default 5", "MAXDown"],
+  ["maxtry", "MAXTry", "Up tries (MAXTry)", 1, 9, "kept and reported; default 2", "MAXTry"],
+  ["maxsum", "MAXSum", "Memory-ARQ (MAXSum)", 5, 60, "kept and reported; default 30", "MAXSum"],
+  ["fska", "FSKAmpl", "FSK level (FSKAmpl)", 10, 1000, "kept and reported; the FSK level follows PSKAmpl; default 60", "FSKAmpl"],
+];
+const TUNE = [     // the tuning tone before a new call (TUnetone S HZ DB; Signum's own, off by default)
+  ["tune_s", "TUnetone", "Duration", 0, 10, "s of steady tone for an automatic antenna tuner before each new call we place (not on call repeats, not as callee); 0 = off (default)", "--tune-tone TUnetone"],
+  ["tune_hz", "TUnetone", "Frequency", 300, 2700, "Hz; default 1500 (the middle of the P3 band)", "--tune-hz"],
+  ["tune_db", "TUnetone", "Level", -30, 0, "dB against the data level; default 0 = the same power as the P1 call packets", "--tune-db"],
+];
+const ALLP = PARAMS.concat(STATIONP, LISTENP, HOSTP, COMPAT, TUNE);
+// Next-start settings: option (as on the command line), label, kind (text|num|flag|choice|secret),
+// min/max or choices, the default as shown, hint, card.
+const START = [
+  ["p3-unproto-rx", "P3 unproto in Listen", "flag", null, "off", "Listen mode also prints P3 unproto (U 30-41); the reference unit cannot", "c_listenp"],
+  ["cpu-clock", "CPU clock", "choice", ["auto", "max", "off"], "auto", "auto: held at its maximum while a link is up; max: always; off: left to the governor (sound card only)", "c_cpu"],
+  ["alsa", "Sound card", "text", null, "(required)", "the ALSA device, e.g. plughw:CARD=CODEC", "c_radio"],
+  ["ptt", "PTT", "text", null, "none", "rts:TTY, dtr:TTY, civ:TTY:ADDR[:BAUD], rig[:HOST[:PORT]], none (vox: do not use)", "c_radio"],
+  ["cal", "Calibration file", "text", null, "~/.config/signum/calibration.conf", "the timing calibration file", "c_cal"],
+  ["no-autocal", "No self-calibration", "flag", null, "off", "on: never measure the timing or the sound card's rate", "c_cal"],
+  ["autocal-state", "Self-calibration state", "text", null, "~/.config/signum/autocal-DEV.conf", "where self-calibration keeps what it measured", "c_cal"],
+  ["autocal-max-ms", "Hardware round trip max (ms)", "num", [1, 1000], "45", "readings above this are refused; raise for a slower radio path", "c_cal"],
+  ["audio-ppm", "Sound card rate error (ppm)", "num", [-2000, 2000], "measured", "instead of self-calibration's measurement", "c_cal"],
+  ["rt-latency", "Timing override (s)", "num", [0, 2], "measured", "advanced: a direct timing override instead of the file's", "c_cal"],
+  ["prime-ms", "Playback buffer (ms)", "num", [5, 500], "40", "advanced: audio queued ahead of the sound card", "c_cal"],
+  ["pty", "Serial port (pty)", "text", null, "/tmp/ttysignum0", "the host-mode serial port for Pat and other host programs; none = no port", "c_net"],
+  ["telnet", "Telnet port", "num", [0, 65535], "3000", "the command interpreter on TCP; 0 = off", "c_net"],
+  ["telnet-bind", "Telnet address", "text", null, "127.0.0.1", "0.0.0.0 for every interface", "c_net"],
+  ["telnet-auth", "Telnet password", "secret", null, "open", "a password prompt before the interpreter attaches", "c_net"],
+  ["ws", "GUI / WebSocket address", "text", null, "127.0.0.1:8770", "[ADDR:]PORT of this GUI, the WebSocket API and /shell", "c_net"],
+  ["no-ws", "No GUI / WebSocket", "flag", null, "off", "on: none of them at the next start (this page then cannot be opened)", "c_net"],
+  ["web-auth", "GUI login", "secret", null, "open", "USER:PASS for the GUI pages", "c_net"],
+  ["ws-auth", "WebSocket login", "secret", null, "open", "USER:PASS for the WebSocket API and /shell", "c_net"],
+  ["gui", "GUI directory", "text", null, "the installed www/", "the directory served over HTTP", "c_net"],
+  ["quiet", "Quiet", "flag", null, "off", "on: no modem log on standard output", "c_net"],
+];
+let station = {}, startup = {file: "", read: false, values: {}, running: {}};
+const pval = {};                                  // values read through commands (keys the station does not report)
+const prow = ([k, c, l, lo, hi, h, o]) =>
+  `<div class="k">${esc(l)}</div><div><input class="in" type="number" min="${lo}" max="${hi}" id="p_${k}" data-opt="${esc(o)}" style="width:100px"> <span class="muted" id="pa_${k}"></span></div><div class="hint">${esc(h)}</div>`;
+$("#c_params").innerHTML = `<div class="k">Auto break-in (PDuplex)</div><div class="seg" id="c_pdx" data-opt="--pduplex PDuplex" title="Every mode. Off (the reference unit): text typed while receiving waits until the sender hands over or you press the break-in key (Ctrl-Y), and while sending we hand over only on Ctrl-Y. On: we break in by ourselves whenever text is waiting (not within PDTimer s of the other station's break-in) and hand over whenever our text has run out."><button data-v="0">Off</button><button data-v="1">On</button></div>` +
+  `<div class="hint">off (default, as the reference unit) = break in and hand over only on Ctrl-Y or the sender's changeover; on = by ourselves</div>` +
+  PARAMS.map(prow).join("");
+$("#c_station").innerHTML = STATIONP.map(prow).join("");
+$("#c_listenp").innerHTML = LISTENP.map(prow).join("");
+$("#c_host").innerHTML = HOSTP.map(prow).join("");
+$("#c_compat").innerHTML = COMPAT.map(prow).join("");
+$("#c_tune").innerHTML = `<div class="k">Method (--tune-method)</div><div class="seg" id="c_tunem" data-opt="--tune-method" title="Auto: the radio's own tuner cycle through rigctld when the PTT is rig: and the rig lists the TUNE operation, else the tone. Tone: always the tone. Radio: the radio's tune; the tone (the reason is in the log) when that is not possible. The radio transmits at its own RF POWER setting, not at the data level."><button data-v="auto">Auto</button><button data-v="tone">Tone</button><button data-v="radio">Radio</button></div>` +
+  `<div class="hint">auto (default): the radio's own tune when possible (--ptt rig:, rig with TUNE), else the tone; the radio's tune transmits at the radio's RF POWER setting, and the duration is the longest wait. The log says which was used</div>` + TUNE.map(prow).join("");
+for (const [k, c] of ALLP) $("#p_" + k).addEventListener("change", e => {
+  const v = e.target.value.trim(); if (v === "") return;
+  $("#c_perr").textContent = "";
+  if (k in station || !c) setStation({[k]: +v});
+  else { const id = nextId; paramReqs.set(id, k); send({type: "command", line: `${c} ${v}`}); }
+});
+const srow = ([o, l, kind, x, def, h]) => {
+  const id = "s_" + o.replace(/-/g, "_");
+  let f;
+  if (kind === "flag") f = `<div class="seg" id="${id}" data-opt="--${o}"><button data-v="">Off</button><button data-v="on">On</button></div>`;
+  else if (kind === "choice") f = `<div class="seg" id="${id}" data-opt="--${o}">${x.map(c => `<button data-v="${c === def ? "" : c}">${esc(c)}</button>`).join("")}</div>`;
+  else f = `<div style="display:flex;gap:6px;align-items:center;min-width:0"><input class="in" id="${id}" data-opt="--${o}" ${kind === "num" ? `type="number" min="${x[0]}" max="${x[1]}" style="width:110px"` : kind === "secret" ? 'type="password" autocomplete="off" style="width:100%;max-width:220px"' : 'spellcheck="false" style="width:100%;max-width:260px"'}>` +
+    (kind === "secret" ? `<button class="btn" data-clear="${o}">Clear</button>` : "") + `</div>`;
+  const rng = kind === "num" ? `${x[0]} to ${x[1]}; ` : "";
+  return `<div class="k">${esc(l)}</div>${f}<div class="hint">${esc(h)}; ${rng}default ${esc(def)} · <span class="now" id="n_${id}"></span></div>`;
+};
+for (const card of new Set(START.map(r => r[6]))) $("#" + card).insertAdjacentHTML("beforeend", START.filter(r => r[6] === card).map(srow).join(""));
+const startSet = o => { $("#c_serr").textContent = ""; const id = nextId; paramReqs.set(id, "_start"); send({type: "startup_set", options: o}); };
+for (const [o, , kind] of START) {
+  const el = $("#s_" + o.replace(/-/g, "_"));
+  if (kind === "flag" || kind === "choice") el.querySelectorAll("button").forEach(b => b.onclick = () => startSet({[o]: b.dataset.v || null}));
+  else el.addEventListener("change", e => startSet({[o]: e.target.value.trim() || null}));
+}
+document.querySelectorAll("#p-config button[data-clear]").forEach(b => b.onclick = () => startSet({[b.dataset.clear]: null}));
+function showStartup(m) {
+  startup = m.startup || startup;
+  const v = startup.values || {}, run = startup.running || {}, none = !startup.file;
+  for (const [o, , kind, , def] of START) {
+    const id = "s_" + o.replace(/-/g, "_"), el = $("#" + id), has = o in v;
+    if (kind === "flag") segSet(id, has && /^(on|1|yes|true)$/.test(v[o]) ? "on" : "");
+    else if (kind === "choice") segSet(id, has && v[o] !== def ? v[o] : "");
+    else if (kind === "secret") { if (document.activeElement !== el) el.value = ""; el.placeholder = has ? "set (hidden)" : "open"; }
+    else if (document.activeElement !== el) { el.value = has ? v[o] : ""; el.placeholder = def; }
+    el.querySelectorAll ? el.querySelectorAll("button").forEach(b => b.disabled = none) : 0;
+    if (el.tagName === "INPUT") el.disabled = none;
+    $("#n_" + id).textContent = "now: " + (o in run ? run[o] : (o === "alsa" && station.alsa ? station.alsa : o === "ptt" && station.ptt ? station.ptt : o === "pty" && station.pty ? station.pty : "default"));
+  }
+  $("#c_keep").disabled = none;
+  if (crBuilt) crStartup();
+  $("#c_file").innerHTML = [["File", startup.file || "none this run (--no-config or SIGNUM_CONFIG=none)"],
+    ["At this start", startup.file ? (startup.read ? "read" : "not there yet (written on the first change)") : "—"],
+    ["Order", "the file first, then the command line, which wins"]].map(([k, x]) => `<div class="k">${esc(k)}</div><div class="v wrap">${esc(x)}</div>`).join("");
+}
+$("#c_keep").onclick = () => {                    // the live settings that have a start option, as the file holds them (defaults: no line)
+  const st = station, d = (x, def) => String(x) === String(def) ? null : String(x);
+  const o = {"call": d(st.mycall, "N0CALL"), "mylevel": d(st.mylevel, 3), "tones": d(`${st.tone_lo},${st.tone_hi}`, "1400,1600"), "listen": st.listen ? null : "off",
+    "cpu-adaptive": st.cpu_adaptive ? null : "off", "peer-marker": st.peer_marker === 0 ? "off" : null, "alc-warn": st.alc_warn === 0 ? "off" : null, "tune-tone": d(st.tune_s, 0), "tune-method": d(st.tune_method || "auto", "auto"), "tune-hz": d(st.tune_hz, 1500), "tune-db": d(st.tune_db, 0),
+    "tx-gain": d(+st.tx_gain, 0), "max-key": d(st.max_key, 90), "pduplex": st.pduplex ? "on" : null, "pdtimer": d(st.pdtimer, 12)};
+  if (crBuilt && cr) Object.assign(o, {"encryption-trust": d(cr.trust, "tofu"), "encryption-wait": d(cr.wait_s, 60),
+    "encryption-compression": cr.compress === false ? "off" : null, "verify-trust": d(cr.verify_trust || "stored", "stored"), "sign": cr.sign ? "on" : null});
+  startSet(o); $("#c_keepmsg").textContent = "kept: the next start begins with these";
+  setTimeout(() => $("#c_keepmsg").textContent = "", 4000);
+};
+function paramsQuery() {                          // the parameters the station does not report: ask their commands
+  for (const [k, c] of ALLP) if (!(k in station) && c) { const id = nextId; paramReqs.set(id, k); send({type: "command", line: c}); }
+}
+function paramAnswer(k, text, ok) {
+  const t = (text || "").trim();
+  if (k === "_quiet") return;
+  if (k === "_rig") { if (!ok) { if (rigPower) { rigPower = false; $("#ic73_pw").disabled = false; $("#ic73_pwout").textContent = "Not done: " + t; return; } rigRunning = false; $("#rig_status").textContent = t; rigButtons(); } return; }
+  if (k === "_start") { $("#c_serr").textContent = ok ? "" : t; return; }
+  if (k === "_set") { $("#c_perr").textContent = !ok || /ERROR|BAD/.test(t) ? t.replace(/\*\*\*\s*/g, "") : ""; return; }
+  if (!ok || /ERROR/.test(t)) { $("#c_perr").textContent = t.replace(/\*\*\*\s*/g, ""); return; }
+  if (k in station) return;                       // the station reports it: config is the truth (an answer such as "4 (20 MSEC)" is not)
+  const nums = t.match(/-?\d+/g);
+  if (nums) { pval[k] = +nums[nums.length - 1]; if (document.activeElement !== $("#p_" + k)) $("#p_" + k).value = pval[k]; }
+  $("#pa_" + k).textContent = "";
+}
+const setStation = o => { const id = nextId; paramReqs.set(id, "_set"); send({type: "config_set", station: o}); };
+function segSet(id, v) { document.querySelectorAll(`#${id} button`).forEach(b => b.classList.toggle("on", String(b.dataset.v) === String(v))); }
+function showConfig(m) {
+  station = m.station || {};
+  const st = station;
+  if (document.activeElement !== $("#c_call")) $("#c_call").value = st.mycall || "";
+  segSet("c_cpuad", st.cpu_adaptive);
+  if ("peer_marker" in st) segSet("c_peer", st.peer_marker);
+  if ("alc_warn" in st) segSet("c_alc", st.alc_warn);
+  segSet("c_pdx", st.pduplex);
+  if ("tune_method" in st) segSet("c_tunem", st.tune_method);
+  if ("p3_long_ceiling" in st) $("#c_cpuad_h").textContent = !st.cpu_adaptive ? "off: long packets as P3 receiver never asked for" :
+    st.p3_long_ceiling >= 6 ? "adaptive (default): long packets as P3 receiver at every level (dropped by level if this computer decodes them late)" :
+    st.p3_long_ceiling > 0 ? `adaptive (default): long packets as P3 receiver up to level ${st.p3_long_ceiling} on this computer (measured)` : "adaptive (default): this computer was measured too slow for long packets";
+  segSet("c_myl", st.mylevel); segSet("c_mode", st.mode); segSet("c_listen", st.listen === true ? 1 : st.listen === false ? 0 : st.listen);
+  if (document.activeElement !== $("#c_lo")) $("#c_lo").value = st.tone_lo || "";
+  if (document.activeElement !== $("#c_hi")) $("#c_hi").value = st.tone_hi || "";
+  for (const [k] of ALLP) if (k in st && document.activeElement !== $("#p_" + k)) $("#p_" + k).value = st[k];
+  showStartup({});
+  const sm = $("#savedmsg"); sm.classList.add("flash"); setTimeout(() => sm.classList.remove("flash"), 900);
+}
+$("#c_call").addEventListener("change", e => setStation({mycall: e.target.value.trim().toUpperCase()}));
+document.querySelectorAll("#c_myl button").forEach(b => b.onclick = () => setStation({mylevel: +b.dataset.v}));
+document.querySelectorAll("#c_mode button").forEach(b => b.onclick = () => setStation({mode: +b.dataset.v}));
+document.querySelectorAll("#c_listen button").forEach(b => b.onclick = () => setStation({listen: +b.dataset.v}));
+document.querySelectorAll("#c_cpuad button").forEach(b => b.onclick = () => setStation({cpu_adaptive: +b.dataset.v}));
+document.querySelectorAll("#c_peer button").forEach(b => b.onclick = () => setStation({peer_marker: +b.dataset.v}));
+document.querySelectorAll("#c_alc button").forEach(b => b.onclick = () => setStation({alc_warn: +b.dataset.v}));
+document.querySelectorAll("#c_pdx button").forEach(b => b.onclick = () => setStation({pduplex: +b.dataset.v}));
+document.querySelectorAll("#c_tunem button").forEach(b => b.onclick = () => setStation({tune_method: b.dataset.v}));
+const tones = () => { const lo = +$("#c_lo").value, hi = +$("#c_hi").value; if (lo > 0 && hi > lo) setStation({tone_lo: lo, tone_hi: hi}); };
+$("#c_lo").addEventListener("change", tones); $("#c_hi").addEventListener("change", tones);
+$("#c_t4").onclick = () => { const id = nextId; paramReqs.set(id, "_set"); send({type: "command", line: "TONES 4"}); };
+
+// ---------------------------------------------------------------- encryption (docs/md/encryption.md, src/web/README.md "Encryption")
+// Shown only when the TNC was built with it (hello.crypto true; body.crypto); a build without encryption shows
+// none of it. Rules (owner): turning it on always shows the legal warning and the text saying it is not
+// compatible with SCS, and needs the acknowledgement typed out; nothing here ever drops a link to clear
+// text: a failure is shown (the Status tab's Encryption card, the log), never worked around.
+let crBuilt = false, cr = null;
+const crPend = new Map();                         // request id -> callback(crypto_result)
+function crReq(op, f, cb) { const id = nextId; if (cb) crPend.set(id, cb); send(Object.assign({type: "crypto", op}, f || {})); }
+function crSay(id, r, good) {                     // a request's answer in a card's message line
+  const el = D(id); if (!el) return;
+  el.classList.toggle("bad", !r.ok);
+  el.textContent = r.ok ? (good !== undefined ? good : r.text || "done") : "refused: " + (r.text || "error");
+}
+const crAct = (id, good) => r => crSay(id, r, good);
+function crBuiltSet(on) {
+  crBuilt = !!on;
+  document.body.classList.toggle("crypto", crBuilt);
+  if (!crBuilt) cr = null;
+  crGroup(crBuilt);
+}
+// The front panel's Crypto lamp group exists only once hello says the TNC has encryption (owner): it is not in
+// the page's markup, so a build without encryption never has it, not even for a moment before hello, and its
+// panel is exactly the panel without encryption (no element, label, tooltip or gap). Placed under the Display
+// (owner, 2026-11-16: after Link it wrapped the lamp block to another row and made the panel taller).
+function crGroup(on) {
+  const g = D("crgrp");
+  if (!on) { if (g) { if (tipFor && g.contains(tipFor)) tipHide(); g.remove(); } return; }
+  if (g) return;
+  const lc = (k, labels) => `<div class="lc" id="LC_${k}" data-tip tabindex="0"><i class="led" id="L_c${k}"></i><span class="lt">${labels}</span></div>`;
+  D("dispcol").insertAdjacentHTML("beforeend", `<div class="lgrp" id="crgrp"><div class="lamps">` +
+    lc("arm", '<span class="g">Armed</span>') + lc("key", '<span class="g">Key</span><span class="r">Fail</span>') +
+    lc("sec", '<span class="g">Secure</span>') + lc("ver", '<span class="g">Verified</span><span class="y">Unverified</span>') +
+    `</div><div class="cap">Crypto</div></div>`);
+}
+// The generic dialog: title, body HTML, buttons [{label, cls, fn}] (a button without fn just closes).
+function crDialog(title, body, buttons) {
+  D("crdlg_t").textContent = title; D("crdlg_b").innerHTML = body;
+  const bb = D("crdlg_btns"); bb.innerHTML = "";
+  for (const b of buttons.concat([{label: "Cancel"}])) {
+    const e = document.createElement("button"); e.className = "btn" + (b.cls ? " " + b.cls : ""); e.textContent = b.label;
+    if (b.id) e.id = b.id;
+    e.onclick = () => { D("crdlg").classList.remove("on"); if (b.fn) b.fn(); };
+    bb.appendChild(e);
+  }
+  D("crdlg").classList.add("on");
+}
+function crDownload(name, text) {
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], {type: "text/plain"})); a.download = name;
+  document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+function crCopy(text, ta, msgId) {
+  const done = () => crSay(msgId, {ok: true}, "copied");
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, () => { ta.select(); document.execCommand("copy"); done(); });
+  else { ta.select(); try { document.execCommand("copy"); done(); } catch (e) { crSay(msgId, {ok: false, text: "select the text and copy it"}); } }
+}
+// A key block in a dialog (a secret one with its warning): copy, save, close.
+function crShowBlock(title, warn, block, file) {
+  crDialog(title, (warn ? `<div class="crwarn"><b>SECRET.</b> ${esc(warn)}</div>` : "") +
+    `<textarea class="ta" id="crdlg_ta" readonly spellcheck="false" style="min-height:150px">${esc(block)}</textarea><div class="crmsg" id="crdlg_msg"></div>`,
+    [{label: "Copy", fn: () => { crCopy(block, D("crdlg_ta"), "crdlg_msg"); D("crdlg").classList.add("on"); }},
+     {label: "Save…", fn: () => crDownload(file, block)}]);
+  D("crdlg_btns").lastChild.textContent = "Close";
+}
+// ---- turning it on: the warning and the acknowledgement, the first time (now, or in the settings file); then it is stored
+const crAcked = () => !!(cr && cr.ack_stored);
+let crackMode = "";
+function crAsk(mode) {
+  if (!cr) return;
+  crackMode = mode;
+  D("crack_title").textContent = mode === "start" ? "Encryption at the next start" : "Turn encryption on";
+  D("crack_warn").textContent = cr.warning || ""; D("crack_nc").textContent = cr.not_compatible || ""; D("crack_np").textContent = cr.no_plain || "";
+  D("crack_go").textContent = mode === "start" ? "Write it to the settings file" : "Turn encryption on";
+  D("crack_in").value = ""; D("crack_go").disabled = true; D("crack_err").textContent = "";
+  D("crack").classList.add("on"); D("crack_in").focus();
+}
+const crAckOk = () => D("crack_in").value.trim().toUpperCase() === ((cr && cr.ack) || "NOT-AMATEUR");
+D("crack_in").addEventListener("input", () => { D("crack_go").disabled = !crAckOk(); });
+D("crack_in").addEventListener("keydown", e => { if (e.key === "Enter" && crAckOk()) D("crack_go").click(); });
+D("crack_cancel").onclick = () => D("crack").classList.remove("on");
+D("crack_go").onclick = () => {
+  if (!crAckOk()) return;
+  const ack = (cr && cr.ack) || "NOT-AMATEUR";
+  if (crackMode === "start") { startSet({"encryption": "on", "encryption-ack": ack}); D("crack").classList.remove("on"); return; }
+  crReq("set", {on: true, ack}, r => {
+    if (r.ok) { D("crack").classList.remove("on"); crSay("cr_msg", r, "encryption ON: links to other Signums are encrypted or ended, never in clear"); }
+    else D("crack_err").textContent = "refused: " + r.text;
+  });
+};
+document.querySelectorAll("#cr_on button").forEach(b => b.onclick = () => {
+  if (b.dataset.v === "1") { if (!cr || !cr.on) { if (crAcked()) crReq("set", {on: true}, crAct("cr_msg", "encryption ON: links to other Signums are encrypted or ended, never in clear")); else crAsk("now"); } }
+  else if (b.dataset.v === "v") { if (!cr || cr.protection !== "verify") crReq("set", {protection: "verify"}, crAct("cr_msg", "identity check ON (verify): the other Signum's key is checked at link start, then the data goes in clear; a link where the check cannot be made is ended")); }
+  else if (cr && (cr.on || cr.protection === "verify")) crReq("set", {protection: "off"}, crAct("cr_msg", cr.on ? "encryption off: the next links are not encrypted" : "identity check off: the next links are not checked"));
+});
+document.querySelectorAll("#s_encryption button").forEach(b => b.onclick = () => {
+  if (b.dataset.v === "on") { if (crAcked()) startSet({"encryption": "on"}); else crAsk("start"); } else startSet({"encryption": b.dataset.v || null});
+});
+document.querySelectorAll("#cr_sign button").forEach(b => b.onclick = () => crReq("set", {sign: b.dataset.v === "1"}, crAct("cr_msg", b.dataset.v === "1" ? "sign on: in verify mode every record carries a tag (from the next link)" : "sign off: the identity is checked at link start only (from the next link)")));
+document.querySelectorAll("#cr_vtrust button").forEach(b => b.onclick = () => crReq("set", {verify_trust: b.dataset.v}, crAct("cr_msg", "trust (verify): " + {stored: "only stored keys", tofu: "first contact allowed", verified: "only verified keys"}[b.dataset.v])));
+D("cr_ackoff").onclick = () => crReq("ack_withdraw", {}, crAct("cr_msg", "acknowledgement withdrawn, encryption off: turning it on asks for NOT-AMATEUR again"));
+document.querySelectorAll("#cr_comp button").forEach(b => b.onclick = () => crReq("set", {compress: b.dataset.v === "1"}, crAct("cr_msg", b.dataset.v === "1" ? "compression on (from the next link)" : "compression off (from the next link)")));
+document.querySelectorAll("#cr_trust button").forEach(b => b.onclick = () => crReq("set", {trust: b.dataset.v}, crAct("cr_msg", "trust (encryption): " + {stored: "only stored keys", tofu: "first contact allowed", verified: "only verified keys"}[b.dataset.v])));
+D("cr_wait").addEventListener("change", e => { const v = +e.target.value; if (v) crReq("set", {wait_s: v}, crAct("cr_msg", `set-up timeout ${v} s`)); });
+D("s_key_dir").addEventListener("change", e => startSet({"key-dir": e.target.value.trim() || null}));
+// ---- this station's key pair
+D("cr_keygen").onclick = () => {
+  if (cr && cr.have_key) crDialog("Replace this station's key pair",
+    `<div class="crwarn">The old key pair is deleted. Every station that stored its public key will refuse links with this one (its key "is NOT the one stored") until it gets the new public key and deletes the old one.</div>`,
+    [{label: "Replace the key pair", cls: "danger", fn: () => crReq("keygen", {force: true}, crAct("cr_mine_msg", "new key pair made: give the new public key to your partners"))}]);
+  else crReq("keygen", {}, crAct("cr_mine_msg", "key pair made"));
+};
+D("cr_copy").onclick = () => { if (cr && cr.public_block) crCopy(cr.public_block, D("cr_pub"), "cr_mine_msg"); };
+D("cr_save").onclick = () => { if (cr && cr.public_block) crDownload(((station.mycall || "station").replace(/[^A-Za-z0-9-]/g, "_")) + "-public-key.txt", cr.public_block); };
+D("cr_sendkey").onclick = () => crReq("send_key", {}, crAct("cr_mine_msg"));
+D("cr_priv").onclick = () => crDialog("Export the private key",
+  `<div class="crwarn"><b>SECRET.</b> Anyone who has this block can pose as your station. Use it only to move or back up the station, store it like a password, and never send it over the air or by unencrypted mail.</div>`,
+  [{label: "Show the private key", cls: "danger", fn: () => crReq("export", {what: "private"}, r => r.ok ? crShowBlock("This station's private key", "Anyone with this block can pose as your station.", r.block, "station-private-key.txt") : crSay("cr_mine_msg", r))}]);
+// ---- import
+D("cri_file").addEventListener("change", e => { const f = e.target.files[0]; if (!f) return; const rd = new FileReader(); rd.onload = () => { D("cri_text").value = String(rd.result).slice(0, 1 << 20); }; rd.readAsText(f); });
+D("cri_go").onclick = () => {
+  const text = D("cri_text").value;
+  if (!text.trim()) return crSay("cri_msg", {ok: false, text: "paste a key block or open a file first"});
+  crReq("import", {text, call: D("cri_call").value.trim().toUpperCase(), force: D("cri_force").checked}, r => {
+    crSay("cri_msg", r, r.text + (/public key of/.test(r.text) ? " Verify each public key's fingerprint (Known stations)." : ""));
+    if (r.ok) { D("cri_text").value = ""; D("cri_file").value = ""; D("cri_force").checked = false; }
+  });
+};
+// ---- known stations, received keys, pre-shared keys (the tables are redrawn only when their contents change)
+const crWhen = s => s ? new Date(s * 1000).toLocaleString(undefined, {year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"}) : "—";
+// Marks verified only the key with this fingerprint (the server refuses if the stored key is another one).
+function crVerifyDlg(call, fp, how) {
+  const ck = cr && cr.link && cr.link.changed_key, changed = ck && ck.call === call && ck.old === fp;
+  crDialog(`Verify ${call}'s key`,
+    (changed ? `<div class="crwarn amber">${esc(call)} presented a <b>different</b> key on the last link (${esc(ck.new)}). This verifies the key <b>stored</b> here, shown below. If ${esc(call)}'s key really changed, use <b>Replace…</b> instead.</div>` : "") +
+    `<div class="crnote">Compare this fingerprint with the operator of <b>${esc(call)}</b> by a channel you trust (telephone, in person; not over the data link itself)${how ? ", or the SAS of this link: " + esc(how) : ""}. Their console shows it with CRYPTO MYKEY; this page shows it under "This station's key pair".</div><span class="fp big">${esc(fp)}</span>`,
+    [{label: "It matches: mark verified", cls: "primary", fn: () => crReq("peer_verify", {call, verified: true, fingerprint: fp}, crAct("cr_peer_msg", call + "'s key " + fp + " marked verified"))}]);
+}
+// A station presented a key other than the stored one (the link failed): replace the stored key with it.
+function crReplaceDlg() {
+  const ck = cr && cr.link && cr.link.changed_key; if (!ck) return;
+  const go = v => crReq("peer_replace", {call: ck.call, fingerprint: ck.new, verified: v}, r => { crSay("cr_peer_msg", r, r.ok ? `${ck.call}'s stored key replaced with ${ck.new}` + (v ? ", verified" : ", NOT verified") : r.text); crSay("crs_msg", r, r.ok ? `${ck.call}'s stored key replaced: call again` : r.text); });
+  crDialog(`Replace the stored key for ${ck.call}`,
+    `<div class="crwarn">${esc(ck.call)} presented a key that is <b>not</b> the one stored for it. Either its operator made a new key pair, or <b>someone is posing as ${esc(ck.call)}</b>. Replace the stored key only after its operator has confirmed the new fingerprint to you by telephone or in person (never over the radio link itself).</div>
+     <div class="crnote">Stored now (old):</div><span class="fp big" id="crr_old">${esc(ck.old)}</span>
+     <div class="crnote">Presented on the last link (new):</div><span class="fp big" id="crr_new">${esc(ck.new)}</span>`,
+    [{label: "New fingerprint confirmed: replace and mark verified", cls: "danger", id: "crr_verified", fn: () => go(true)},
+     {label: "Replace, not verified yet", id: "crr_unverified", fn: () => go(false)}]);
+}
+let crTabs = "";
+function crTables(c) {
+  const ck = c.link && c.link.changed_key;
+  const sig = JSON.stringify([c.peers, c.received, c.psks, ck]);
+  if (sig === crTabs) return;
+  crTabs = sig;
+  D("cr_peer_t").innerHTML = !c.peers.length ? `<tr><td class="muted">no known stations</td></tr>` :
+    `<tr><th>Station</th><th>Fingerprint</th><th>Trust</th><th>Since</th><th></th></tr>` + c.peers.map(p => `<tr><td>${esc(p.call)}</td><td class="fp" style="font-size:12px">${esc(p.fingerprint)}</td>
+      <td>${p.verified ? '<span class="ok-t">verified</span>' : '<span class="warn-t">NOT verified</span>'}${ck && ck.call === p.call ? `<br><span class="bad-t" title="the last link with ${esc(p.call)} failed: it presented ${esc(ck.new)}">presented another key: ${esc(ck.new.slice(0, 9))}…</span>` : ""}</td><td>${crWhen(p.since)}</td>
+      <td>${ck && ck.call === p.call ? `<button class="btn danger" data-pr="${esc(p.call)}">Replace…</button> ` : ""}${p.verified ? `<button class="btn" data-pu="${esc(p.call)}">Unverify</button>` : `<button class="btn primary" data-pv="${esc(p.call)}" data-fp="${esc(p.fingerprint)}">Verify…</button>`}
+        <button class="btn" data-pe="${esc(p.call)}">Export</button> <button class="btn danger" data-pd="${esc(p.call)}">Delete…</button></td></tr>`).join("");
+  D("cr_recv_t").innerHTML = !c.received.length ? `<tr><td class="muted">none waiting</td></tr>` :
+    `<tr><th>Station</th><th>Fingerprint</th><th>Received</th><th></th></tr>` + c.received.map(p => `<tr><td>${esc(p.call)}</td><td class="fp" style="font-size:12px">${esc(p.fingerprint)}</td>
+      <td>${crWhen(p.when)}</td><td><button class="btn primary" data-rv="${esc(p.call)}" data-fp="${esc(p.fingerprint)}">Review…</button> <button class="btn danger" data-rr="${esc(p.call)}">Reject</button></td></tr>`).join("");
+  D("cr_psk_t").innerHTML = !c.psks.length ? `<tr><td class="muted">no pre-shared keys</td></tr>` :
+    `<tr><th>Name</th><th>Id</th><th></th></tr>` + c.psks.map(p => `<tr><td>${esc(p.name)}${p.name === "*" ? ' <span class="muted">(every station)</span>' : ""}</td><td class="fp" style="font-size:12px">${esc(p.id)}</td>
+      <td><button class="btn" data-ke="${esc(p.name)}">Export…</button> <button class="btn danger" data-kd="${esc(p.name)}">Delete…</button></td></tr>`).join("");
+}
+D("cr_peers").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  const d = b.dataset;
+  if (d.pv) crVerifyDlg(d.pv, d.fp, cr && cr.link && cr.link.state === "secure" && cr.link.call === d.pv ? cr.link.sas : "");
+  else if (d.pr) crReplaceDlg();
+  else if (d.pu) crReq("peer_verify", {call: d.pu, verified: false}, crAct("cr_peer_msg", d.pu + "'s key no longer verified"));
+  else if (d.pe) crReq("export", {what: "peer", call: d.pe}, r => r.ok ? crShowBlock(d.pe + "'s public key", "", r.block, d.pe.replace(/[^A-Za-z0-9-]/g, "_") + "-public-key.txt") : crSay("cr_peer_msg", r));
+  else if (d.pd) crDialog(`Delete ${d.pd}'s key`, `<div class="crnote">Links with ${esc(d.pd)} then start again from first contact (or are refused with trust "verified only"). Do this after the other operator confirmed a new key.</div>`,
+    [{label: "Delete", cls: "danger", fn: () => crReq("peer_delete", {call: d.pd}, crAct("cr_peer_msg", d.pd + "'s key deleted"))}]);
+  else if (d.rv) crDialog(`A key received from ${d.rv}`,
+    `<div class="crwarn amber">This public key arrived over the air: anyone could have sent it. Compare the fingerprint with the operator of <b>${esc(d.rv)}</b> by telephone or in person (never over the same link) before you accept it as verified.</div><span class="fp big">${esc(d.fp)}</span>`,
+    [{label: "Fingerprint matches: accept as verified", cls: "primary", fn: () => crReq("received_accept", {call: d.rv, verified: true}, crAct("cr_peer_msg", d.rv + "'s key accepted and verified"))},
+     {label: "Accept, not verified yet", fn: () => crReq("received_accept", {call: d.rv, verified: false}, crAct("cr_peer_msg", d.rv + "'s key accepted, NOT verified"))},
+     {label: "Reject", cls: "danger", fn: () => crReq("received_reject", {call: d.rv}, crAct("cr_peer_msg", d.rv + "'s received key dropped"))}]);
+  else if (d.rr) crReq("received_reject", {call: d.rr}, crAct("cr_peer_msg", d.rr + "'s received key dropped"));
+});
+D("crk_add").onclick = () => {
+  const call = D("crk_call").value.trim().toUpperCase(), key = D("crk_key").value.trim();
+  if (!call || !key) return crSay("cr_peer_msg", {ok: false, text: "a call and its key"});
+  crReq("peer_add", {call, key, verified: false}, r => { crSay("cr_peer_msg", r, call + " added, NOT verified: verify its fingerprint"); if (r.ok) { D("crk_call").value = ""; D("crk_key").value = ""; } });
+};
+D("cr_psk").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  const d = b.dataset;
+  if (d.ke) crDialog(`Export the pre-shared key ${d.ke}`, `<div class="crwarn"><b>SECRET.</b> Anyone with this block can read the traffic it protects. Give it only by a safe channel (in person, encrypted mail), never over the air.</div>`,
+    [{label: "Show the key", cls: "danger", fn: () => crReq("export", {what: "psk", name: d.ke}, r => r.ok ? crShowBlock("Pre-shared key " + d.ke, "Anyone with this block can read the traffic it protects.", r.block, "psk-" + (d.ke === "*" ? "all" : d.ke.replace(/[^A-Za-z0-9-]/g, "_")) + ".txt") : crSay("cr_psk_msg", r))}]);
+  else if (d.kd) crDialog(`Delete the pre-shared key ${d.kd}`, `<div class="crnote">Links that used it then need another key (or a key pair at both ends).</div>`,
+    [{label: "Delete", cls: "danger", fn: () => crReq("psk_delete", {name: d.kd}, crAct("cr_psk_msg", "pre-shared key " + d.kd + " deleted"))}]);
+});
+const crName = () => (D("crp_name").value.trim() || "*").toUpperCase();
+D("crp_gen").onclick = () => { const n = crName(), have = cr && cr.psks.some(p => p.name === n);
+  const go = () => crReq("psk_gen", {name: n}, r => crSay("cr_psk_msg", r, `pre-shared key ${n} made, id ${r.psk_id}: Export it for the other station`));
+  if (have) crDialog(`Replace the pre-shared key ${n}`, `<div class="crnote">The old key ${esc(n)} is overwritten; the other station needs the new one.</div>`, [{label: "Replace", cls: "danger", fn: go}]); else go(); };
+D("crp_set").onclick = () => crReq("psk_set", {name: crName(), key: D("crp_key").value.trim()}, r => { crSay("cr_psk_msg", r, `pre-shared key ${crName()} set, id ${r.psk_id}`); if (r.ok) D("crp_key").value = ""; });
+D("crp_ph").onclick = () => crReq("psk_phrase", {name: crName(), phrase: D("crp_phrase").value}, r => { crSay("cr_psk_msg", r, `pre-shared key ${crName()} from the passphrase, id ${r.psk_id}`); if (r.ok) D("crp_phrase").value = ""; });
+// ---- the Status tab's Encryption card: this link's negotiation, fixed rows (nothing below moves)
+const CRSTATE = {idle: ["on: no link", "ok-t"], plain: ["off: this link is not encrypted", "muted"], waiting: ["setting up: waiting for the other station's capability record", "warn-t"],
+  handshake: ["setting up: handshake", "warn-t"], secure: ["ENCRYPTED", "ok-t"], verified: ["IDENTITY VERIFIED · data in clear", "ok-t"], failed: ["FAILED: the link was ended; nothing was sent in clear", "bad-t"]};
+function crSet(id, html, title) { const e = D(id); if (e.innerHTML !== html) e.innerHTML = html; e.title = title || (e.textContent === "—" ? "" : e.textContent); }   // the full text on hover (cut on a narrow screen)
+function crCard() {
+  const c = online ? cr : null, l = c ? c.link || {} : {}, dash = '<span class="muted">—</span>';
+  const ver = c && c.protection === "verify";
+  const st = !c ? null : ver && (l.state === "idle" || !l.state) ? ["verify (identity check): no link", "ok-t"] : !c.on && (l.state === "idle" || !l.state) ? ["off", "muted"]
+    : l.state === "failed" && l.protection === "verify" ? ["FAILED: the link was ended; nothing unverified was sent or passed on", "bad-t"] : CRSTATE[l.state] || [l.state, ""];
+  crSet("crs_state", st ? `<span class="${st[1]}">${esc(st[0] + (l.state === "handshake" && l.pattern ? " (" + l.pattern + ")" : ""))}</span>` : '<span class="muted">not known</span>', st ? st[0] : "");
+  const live = l.state && l.state !== "idle";
+  crSet("crs_call", live && l.call ? esc(l.call) + ` <span class="muted">(${l.role === "caller" ? "we called" : "they called"})</span>` : dash);
+  const comp = (l.features || []).find(f => f.name === "compression");
+  const vlink = l.protection === "verify";
+  crSet("crs_method", l.pattern ? esc(`Noise ${l.pattern} · ${l.mode || ""}`) + (vlink ? esc(l.signed ? " · every record signed" : " · checked at link start only") : comp && comp.agreed ? esc(" · compression " + comp.agreed) : "") : dash,
+    vlink ? (l.signed ? "identity check, data in clear; every record carries an authentication tag (a bad tag ends the link)" : "identity check, data in clear; checked at link start only: a station taking the link over after the check is NOT detected") : comp && comp.why ? "compression: " + comp.why : "");
+  crSet("crs_sas", l.sas ? `<span class="fp">${esc(l.sas)}</span>` : dash, l.sas ? "compare these digits with the other operator by voice on another channel: equal at both ends only if no one sat in the middle" : "");
+  crSet("crs_key", l.peer_fingerprint ? `<span class="fp" style="font-size:12px">${esc(l.peer_fingerprint)}</span> ` + (l.peer_verified ? '<span class="ok-t">verified</span>' : '<span class="warn-t">NOT verified</span>') : dash, l.peer_key || "");
+  const nokeys = c && c.on && (!l.state || l.state === "idle") && !c.have_key && !(c.psks || []).length;
+  const lf = l.state === "idle" && l.last_failed ? l.last_failed : null;
+  crSet("crs_note", c && c.key_dir_error ? `<span class="bad-t">${esc(c.key_dir_error)}</span>` : l.state === "failed" ? `<span class="bad-t">${esc(l.reason)}</span>` : lf ? `<span class="bad-t">the last link (${esc(lf.call)}) FAILED: ${esc(lf.reason)}; nothing was sent in clear</span>` : l.held ? `<span class="warn-t">${l.held} bytes held until the session is up (discarded if it never is)</span>` :
+    nokeys ? '<span class="bad-t">no key pair and no pre-shared key: every link will be refused (Configure tab)</span>' : comp && comp.why ? esc(comp.why) : dash,
+    c && c.key_dir_error ? c.key_dir_error : l.state === "failed" ? l.reason : lf ? lf.reason : nokeys ? "make a key pair or a pre-shared key on the Configure tab" : "");
+  crSet("crs_traffic", l.state === "verified" ? esc(l.signed ? `${l.tx_records || 0} signed records out (${l.tx_bytes || 0} B), ${l.rx_records || 0} in (${l.rx_bytes || 0} B), in clear` : `${l.tx_bytes || 0} B out, ${l.rx_bytes || 0} B in, in clear`)
+    : l.state === "secure" || l.tx_records || l.rx_records ? esc(`${l.tx_records || 0} records out (${l.tx_bytes || 0} B → ${l.tx_compressed || 0} B), ${l.rx_records || 0} in (${l.rx_bytes || 0} B)`) : dash);
+  const nr = c ? (c.received || []).length : 0;
+  crSet("crs_recv", nr ? `<span class="warn-t">${nr} waiting: review on the Configure tab</span>` : c ? "none waiting" : dash);
+  D("crs_verify").disabled = !(c && (l.state === "secure" || l.state === "verified") && l.peer_fingerprint && !l.peer_verified);
+  D("crs_replace").disabled = !(c && l.changed_key);
+  crPanel(c);
+}
+// ---- the front panel's Crypto lamps (docs/md/gui.md "The front panel"): Armed, Key / Fail, Secure, Verified.
+// Only lamps light or go dark; the detail is in each lamp's tooltip. c: the crypto status (null: not connected).
+const CRLEGEND = {
+  arm: "Armed: green = encryption on for this run (every link encrypted, or ended), or the identity check (verify: every link's other station checked, or the link ended; data in clear); dark = off.",
+  key: "Key / Fail: blinking amber = set-up running; green = session keys agreed (encryption) or the other station's identity checked (verify); red = set-up FAILED (the link ended, nothing sent in clear or unverified); steady amber = a public key received over the air waits for review.",
+  sec: "Secure: green = this link's traffic is encrypted; dark = no encrypted session (with verify the data goes in clear: dark).",
+  ver: "Verified: green = the other station's key is verified (fingerprint or SAS compared), or it proved it holds the pre-shared key set for it; amber = not verified; dark = no session."};
+function crLampStates(c) {                        // {arm, key, sec, ver}: [colour, blink, text]; the TUI does the same (tui/signum-tui crypto_lamps)
+  if (!c) return {arm: ["off", false, "not connected"], key: ["off", false, "not connected"], sec: ["off", false, "not connected"], ver: ["off", false, "not connected"]};
+  const l = c.link || {}, st = l.state || "idle", call = l.call || "the other station", rc = c.received || [], nr = rc.length;
+  const how = l.pattern ? ` (Noise ${l.pattern}${l.mode ? ", " + l.mode : ""})` : "";
+  const waiting = nr ? `${nr} public key${nr > 1 ? "s" : ""} received over the air ${nr > 1 ? "wait" : "waits"} for review on the Configure tab (${rc.map(r => r.call).join(", ")}): not trusted until accepted.` : "";
+  const nokeys = !c.have_key && !(c.psks || []).length;
+  const tn = t => ({stored: "stored keys only", tofu: "first contact allowed", verified: "verified keys only"}[t] || t);
+  const arm = c.on ? ["green", false, "Encryption is ON for this run: a link that cannot be encrypted is ended, never continued in clear. Trust: " + tn(c.trust) +
+                      `; set-up timeout ${c.wait_s} s.` + (nokeys ? " No key pair and no pre-shared key: every link will be refused (Configure tab)." : "")]
+    : c.protection === "verify" ? ["green", false, "The identity check (verify) is ON for this run: each link's other station must prove its key at link start, or the link is ended; the data then goes IN CLEAR (not encrypted), " +
+                      (c.sign ? "every record with an authentication tag." : "checked at link start only (a takeover after the check is not detected).") + ` Trust: ${tn(c.verify_trust)}; set-up timeout ${c.wait_s} s.` +
+                      (nokeys ? " No key pair and no pre-shared key: every link will be refused (Configure tab)." : "")]
+                   : ["off", false, "Encryption and the identity check are off for this run: links are neither encrypted nor checked. The Configure tab turns them on."];
+  const lf = st === "idle" ? l.last_failed : null;
+  const vl = l.protection === "verify";
+  const key = st === "failed" ? ["red", false, vl ? `The identity check with ${call} FAILED: ${l.reason || "?"}. The link is being ended; nothing unverified was sent or passed on.` : `The encryption set-up with ${call} FAILED: ${l.reason || "?"}. The link is being ended; nothing was sent in clear.`]
+    : lf ? ["red", false, `The last link (${lf.call}) FAILED: ${lf.reason}. Nothing was sent in clear. Dark again at the next link.`]
+    : st === "waiting" ? ["yellow", true, `Setting up with ${call}: waiting for its capability record (at most ${c.wait_s} s).`]
+    : st === "handshake" ? ["yellow", true, `Setting up with ${call}: handshake running${how}.`]
+    : st === "secure" ? ["green", false, `Session keys agreed with ${call}${how}; new ones for every link.` + (waiting ? " " + waiting : "")]
+    : st === "verified" ? ["green", false, `${call}'s identity checked${how}; the data goes in clear, ` + (l.signed ? "every record with an authentication tag." : "checked at link start only.") + (waiting ? " " + waiting : "")]
+    : nr ? ["yellow", false, waiting]
+    : ["off", false, "No key negotiation."];
+  const comp = (l.features || []).find(f => f.name === "compression");
+  const sec = st === "secure" ? ["green", false, `This link's traffic with ${call} is encrypted${how}` + (comp && comp.agreed ? `, compression ${comp.agreed}` : "") +
+                                 `. SAS ${l.sas || "?"}. ${l.tx_records || 0} records out, ${l.rx_records || 0} in.`]
+    : ["off", false, st === "plain" ? "This link is not encrypted (encryption is off)." : st === "verified" ? `This link is NOT encrypted: identity check only (verify), the data in clear${l.signed ? ", every record signed" : ""}.` : "No encrypted session."];
+  let ver = ["off", false, "No encrypted session."];
+  if (st === "secure" || st === "verified") {
+    if (l.peer_fingerprint) ver = l.peer_verified ? ["green", false, `${call}'s key ${l.peer_fingerprint} is verified.`]
+      : ["yellow", false, `${call}'s key ${l.peer_fingerprint} is NOT verified (${l.peer_key || "not verified"}). Compare the SAS ${l.sas || ""} with the other operator by voice on another channel, then "Their key: mark verified" on the Status tab.`];
+    else if (l.psk && l.psk !== "*") ver = ["green", false, `${call} proved it holds the pre-shared key set for it here (no station keys on this link).`];
+    else ver = ["yellow", false, `This link uses the "*" pre-shared key, which every station holding it shares: it does not show which station this is. A key pair at both ends, or a pre-shared key for ${call} alone, would.`];
+  }
+  return {arm, key, sec, ver};
+}
+function crPanel(c) {
+  if (!D("crgrp")) return;
+  const s = crLampStates(online ? c : null);
+  for (const k of ["arm", "key", "sec", "ver"]) {
+    const [col, blink, text] = s[k], el = D("L_c" + k), box = D("LC_" + k);
+    setLed(el, col); el.classList.toggle("blink", blink);
+    box.title = text + "\n" + CRLEGEND[k]; tipRefresh(box);
+  }
+}
+D("crs_verify").onclick = () => { const l = cr && cr.link; if (l && l.peer_fingerprint) crVerifyDlg(l.call, l.peer_fingerprint, l.sas); };
+D("crs_replace").onclick = crReplaceDlg;
+function showCrypto(c) {
+  cr = c; if (!c) return;
+  D("cr_warning").textContent = c.warning || ""; D("cr_notcomp").textContent = c.not_compatible || ""; D("cr_noplain").textContent = c.no_plain || "";
+  segSet("cr_on", c.on ? 1 : c.protection === "verify" ? "v" : 0); segSet("cr_comp", c.compress === false ? 0 : 1); segSet("cr_trust", c.trust);
+  segSet("cr_sign", c.sign ? 1 : 0); segSet("cr_vtrust", c.verify_trust || "stored");
+  if (document.activeElement !== D("cr_wait")) D("cr_wait").value = c.wait_s;
+  D("cr_fp").textContent = c.have_key ? c.fingerprint : "no key pair";
+  if (D("cr_pub").value !== (c.public_block || "")) D("cr_pub").value = c.public_block || "";
+  D("cr_keygen").textContent = c.have_key ? "Replace key pair…" : "Generate key pair";
+  D("cr_copy").disabled = D("cr_save").disabled = D("cr_priv").disabled = !c.have_key;
+  crSendKey();
+  crTables(c);
+  crCard();
+  crStartup();
+}
+function crSendKey() { const d = (last && last.detail) || {}; D("cr_sendkey").disabled = !(online && cr && cr.have_key && d.state === "connected"); }
+function crStartup() {                             // the next-start fields: from the settings file
+  const v = startup.values || {}, run = startup.running || {}, none = !startup.file;
+  segSet("s_encryption", /^on$/i.test(v.encryption || "") && v["encryption-ack"] ? "on" : /^verify$/i.test(v.encryption || "") ? "verify" : "");
+  D("cr_ackoff").disabled = none || !crAcked();
+  D("n_cr_ack").textContent = none ? "no settings file this run" : crAcked() ? "stored" : "not given yet";
+  D("n_s_encryption").textContent = "now: " + (cr && cr.on ? "on" : cr && cr.protection === "verify" ? "verify" : "off") + (none ? " (no settings file this run)" : "");
+  document.querySelectorAll("#s_encryption button").forEach(b => b.disabled = none);
+  const kd = D("s_key_dir");
+  if (document.activeElement !== kd) { kd.value = v["key-dir"] || ""; kd.placeholder = "~/.config/signum/keys"; }
+  kd.disabled = none;
+  D("n_s_key_dir").textContent = "now: " + (cr ? cr.key_dir : run["key-dir"] || "default");
+}
+
+// ---------------------------------------------------------------- terminal (a stream client of the command interpreter)
+// The interpreter does not echo typed characters (it answers a CR with its own new line), so
+// the terminal echoes locally, switchable (#ttyecho, default on, remembered in this browser):
+// printable characters and Backspace at once; Enter as a new line only if the interpreter's
+// next output does not start with one within 400 ms (command mode answers "\r\n...").
+const tty = $("#tty"), ttyEcho = $("#ttyecho");
+let ttyText = "", echoNl = null;
+try { const v = localStorage.getItem("signum.localEcho"); if (v !== null) ttyEcho.checked = v === "1"; } catch (e) {}
+ttyEcho.onchange = () => { try { localStorage.setItem("signum.localEcho", ttyEcho.checked ? "1" : "0"); } catch (e) {} tty.focus(); };
+function echoFlush() { if (echoNl) { clearTimeout(echoNl); echoNl = null; ttyText += "\n"; ttyRender(); } }
+function localEcho(d) {
+  if (!ttyEcho.checked) return;
+  echoFlush();
+  if (d === "\r") { echoNl = setTimeout(echoFlush, 400); return; }
+  let changed = false;
+  for (const ch of d.replace(/\r/g, "\n")) {
+    if (ch === "\b") { ttyText = ttyText.slice(0, -1); changed = true; }
+    else if (ch === "\n" || ch >= " ") { ttyText += ch; changed = true; }
+  }
+  if (changed) ttyRender();
+}
+function ttyRender() {
+  tty.textContent = ttyText;
+  const c = document.createElement("span"); c.className = "cur"; c.textContent = " "; tty.appendChild(c);
+  tty.scrollTop = tty.scrollHeight;
+}
+function termOut(d) {
+  if (echoNl) { clearTimeout(echoNl); echoNl = null; if (!/^\r?\n|^\r/.test(d)) ttyText += "\n"; }
+  for (const ch of d.replace(/\r\n/g, "\n").replace(/\r/g, "\n")) {
+    if (ch === "\b") ttyText = ttyText.slice(0, -1);
+    else if (ch !== "\u0007") ttyText += ch;
+  }
+  if (ttyText.length > 60000) ttyText = ttyText.slice(-50000);
+  ttyRender();
+}
+function ttySend(d) { if (ws && ws.readyState === 1) ws.send(JSON.stringify({type: "term", data: d})); }
+tty.addEventListener("keydown", e => {
+  let d = null;
+  if (e.ctrlKey && !e.altKey && e.key.length === 1) { const c = e.key.toUpperCase().charCodeAt(0); if (c >= 64 && c < 96) d = String.fromCharCode(c - 64); }
+  else if (e.key === "Enter") d = "\r";
+  else if (e.key === "Escape") d = "\u001b";
+  else if (e.key === "Backspace") d = "\b";
+  else if (e.key.length === 1 && !e.altKey && !e.metaKey) d = e.key;
+  if (d !== null) { e.preventDefault(); ttySend(d); localEcho(d); }
+});
+tty.addEventListener("paste", e => { const t = e.clipboardData.getData("text").replace(/\r?\n/g, "\r"); e.preventDefault(); ttySend(t); localEcho(t); });
+document.querySelectorAll(".ttykeys button[data-k]").forEach(b => b.onclick = () => { ttySend(JSON.parse('"' + b.dataset.k + '"')); tty.focus(); });
+$("#ttyclear").onclick = () => { ttyText = ""; ttyRender(); tty.focus(); };
+ttyRender();
+
+// ---------------------------------------------------------------- log
+const logEl = $("#log");
+function logLine(m) {
+  const t = typeof m.t === "number" ? m.t.toFixed(1).padStart(8) + "  " : "";
+  logEl.appendChild(document.createTextNode(t + m.text + "\n"));
+  while (logEl.childNodes.length > 3000) logEl.removeChild(logEl.firstChild);
+  if ($("#logfollow").checked) logEl.scrollTop = logEl.scrollHeight;
+}
+$("#logclear").onclick = () => { logEl.textContent = ""; };
+
+// ---------------------------------------------------------------- links (this run)
+function showLinks(m) {
+  const t = $("#links");
+  if (!m.links || !m.links.length) { t.innerHTML = `<tr><td class="muted">no links yet</td></tr>`; return; }
+  const when = s => { const d = new Date(s * 1000); return d.toLocaleDateString(undefined, {month: "short", day: "numeric"}) + " " + d.toLocaleTimeString(undefined, {hour: "2-digit", minute: "2-digit"}); };
+  const lvn = (p, l) => !l ? "—" : p === 3 ? "SL" + l : p === 2 ? "L" + l : l === 2 ? "200 Bd" : "100 Bd";
+  t.innerHTML = `<tr><th>When</th><th>Station</th><th>Role</th><th>Mode</th><th>Best · last</th><th>Time</th><th>In · out</th></tr>` +
+    m.links.map(l => `<tr><td>${when(l.start)}</td><td>${esc(l.call)}</td><td>${l.role === "caller" ? "we called" : l.role === "callee" ? "they called" : "—"}</td>
+      <td>${l.plevel ? "P" + l.plevel : "—"}</td><td>${lvn(l.plevel, l.level_max)} · ${lvn(l.plevel, l.level_last)}</td>
+      <td>${fmtT(l.end - l.start)}${l.open ? " <span class=\"muted\">(up)</span>" : ""}</td><td>${fmtB(l.rx_bytes)} · ${fmtB(l.tx_bytes)}</td></tr>`).join("");
+}
+$("#linksbox").addEventListener("toggle", () => { if ($("#linksbox").open) send({type: "links", limit: 100}); });
+
+// ---------------------------------------------------------------- text pane
+const rxEl = $("#rx");
+function addText(cls, text) {
+  const atEnd = rxEl.scrollTop + rxEl.clientHeight >= rxEl.scrollHeight - 4;
+  const span = document.createElement("span");
+  if (cls) span.className = cls;
+  span.textContent = text.replace(/\r\n?/g, "\n");
+  rxEl.appendChild(span);
+  while (rxEl.childNodes.length > 2000) rxEl.removeChild(rxEl.firstChild);
+  if (atEnd) rxEl.scrollTop = rxEl.scrollHeight;
+}
+
+
+// ---------------------------------------------------------------- waterfall
+// Rows of the receive spectrum from the station (src/web/README.md "waterfall"): one byte per
+// bin, 0.5 dB steps from -127.5 dBFS. Asked for only while it is visible.
+let wfInfo = {bin_hz: 9.375, bins: 427, db0: -127.5, db_step: 0.5}, wfSent = null, wfFloor = null, wfLast = null;
+const wfc = $("#wfc"), wfs = $("#wfs"), wfx = wfc.getContext("2d"), wsx = wfs.getContext("2d");
+const wfLut = (() => {                       // black - navy - blue - cyan - yellow - white
+  const stops = [[0, 0, 0, 0], [0.18, 6, 16, 70], [0.4, 20, 90, 220], [0.62, 40, 220, 230], [0.82, 250, 230, 60], [1, 255, 255, 255]];
+  const lut = new Uint8ClampedArray(256 * 3);
+  for (let i = 0; i < 256; i++) {
+    const x = i / 255; let k = 1; while (k < stops.length - 1 && stops[k][0] < x) k++;
+    const a = stops[k - 1], b = stops[k], f = (x - a[0]) / (b[0] - a[0] || 1);
+    for (let c = 0; c < 3; c++) lut[i * 3 + c] = a[c + 1] + (b[c + 1] - a[c + 1]) * f;
+  }
+  return lut;
+})();
+const wfSpan = () => $("#wf_rng").value.split(",").map(Number);
+function wfSize() {
+  const dpr = window.devicePixelRatio || 1, w = Math.max(100, Math.round(wfc.clientWidth * dpr));
+  if (wfc.width !== w) { wfc.width = w; wfc.height = Math.round(180 * dpr); wfx.fillStyle = "#05080c"; wfx.fillRect(0, 0, wfc.width, wfc.height); }
+  if (wfs.width !== w) { wfs.width = w; wfs.height = Math.round(20 * dpr); }
+}
+function wfScale(m) {
+  wfSize();
+  const [f0, f1] = wfSpan(), W = wfs.width, H = wfs.height, dpr = window.devicePixelRatio || 1, x = f => (f - f0) / (f1 - f0) * W;
+  wsx.clearRect(0, 0, W, H);
+  wsx.font = `${10 * dpr}px ui-monospace, monospace`; wsx.textBaseline = "middle"; wsx.textAlign = "center";
+  const step = f1 - f0 > 2000 ? 500 : 100;
+  for (let f = Math.ceil(f0 / step) * step; f <= f1; f += step) {
+    wsx.fillStyle = "#4a5562"; wsx.fillRect(Math.round(x(f)), 0, dpr, 4 * dpr);
+    if (f > f0 && f < f1) { wsx.fillStyle = "#7d8b99"; wsx.fillText(String(f), x(f), H / 2 + 2 * dpr); }
+  }
+  if (m && m.lo && m.hi) {                   // the station's tones (TONES), where the modems listen
+    wsx.fillStyle = "#ffbe2e";
+    for (const f of [m.lo, m.hi]) wsx.fillRect(Math.round(x(f)) - dpr, 0, 2 * dpr, H);
+  }
+}
+function wfRow(m) {
+  if (!$("#wfbox").open) return;
+  wfSize();
+  const raw = atob(m.row), n = raw.length, W = wfc.width, [f0, f1] = wfSpan(), bh = wfInfo.bin_hz || 9.375;
+  const v = new Uint8Array(n); for (let i = 0; i < n; i++) v[i] = raw.charCodeAt(i);
+  // the colour scale follows the noise: the floor is the median of the span shown, smoothed
+  const k0 = Math.max(0, Math.floor(f0 / bh)), k1 = Math.min(n - 1, Math.ceil(f1 / bh));
+  const vis = Array.from(v.subarray(k0, k1 + 1)).sort((a, b) => a - b), med = vis[vis.length >> 1];
+  if (!m.tx) wfFloor = wfFloor === null ? med : wfFloor + 0.1 * (med - wfFloor);   // (our own transmission does not move it)
+  const dr = +$("#wf_dr").value * 2, lo = (wfFloor ?? med) - 6;               // in 0.5 dB steps; 3 dB of noise kept dark
+  wfx.drawImage(wfc, 0, 0, W, wfc.height - 1, 0, 1, W, wfc.height - 1);     // scroll down a line
+  const img = wfx.createImageData(W, 1), d = img.data;
+  for (let px = 0; px < W; px++) {
+    const fa = f0 + (f1 - f0) * px / W, fb = f0 + (f1 - f0) * (px + 1) / W;
+    let a = Math.floor(fa / bh), b = Math.max(a, Math.floor(fb / bh)), mx = 0;
+    for (let k = a; k <= b && k < n; k++) if (v[k] > mx) mx = v[k];
+    const c = Math.max(0, Math.min(255, Math.round((mx - lo) / dr * 255))) * 3;
+    d[px * 4] = wfLut[c]; d[px * 4 + 1] = wfLut[c + 1]; d[px * 4 + 2] = wfLut[c + 2]; d[px * 4 + 3] = 255;
+    if (m.tx && px < 6) { d[px * 4] = 255; d[px * 4 + 1] = 59; d[px * 4 + 2] = 48; }   // we were transmitting
+  }
+  wfx.putImageData(img, 0, 0);
+  if (!wfLast || wfLast.lo !== m.lo || wfLast.hi !== m.hi) wfScale(m);
+  wfLast = m;
+  if (!wfHover) wfInfoText();
+}
+let wfHover = null;
+function wfInfoText() {
+  const m = wfLast, parts = [];
+  if (wfHover !== null) parts.push(`${Math.round(wfHover)} Hz`);
+  if (m) { parts.push(`tones ${m.lo}/${m.hi}`); if (m.afc) parts.push(`AFC ${m.afc > 0 ? "+" : ""}${m.afc} Hz`); if (m.tx) parts.push("TX"); }
+  $("#wf_info").textContent = parts.join(" · ") || "—";
+}
+const wfFreqAt = e => { const r = wfc.getBoundingClientRect(), [f0, f1] = wfSpan(); return f0 + (f1 - f0) * (e.clientX - r.left) / r.width; };
+wfc.onmousemove = e => { wfHover = wfFreqAt(e); wfInfoText(); };
+wfc.onmouseleave = () => { wfHover = null; wfInfoText(); };
+function wfSync() {                           // ask for rows only while the waterfall can be seen
+  const want = !!(ws && ws.readyState === 1 && $("#wfbox").open && $("#p-status").classList.contains("on") && document.visibilityState === "visible");
+  if (want === wfSent) return;
+  wfSent = want;
+  if (ws && ws.readyState === 1) send({type: "waterfall", on: want, rate: +$("#wf_rate").value});
+}
+$("#wfbox").addEventListener("toggle", () => { wfSync(); try { localStorage.setItem("wf_open", $("#wfbox").open ? "1" : "0"); } catch (e) {} });
+document.addEventListener("visibilitychange", wfSync);
+document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => setTimeout(wfSync, 0)));
+$("#wf_rate").onchange = () => { wfSent = null; wfSync(); try { localStorage.setItem("wf_rate", $("#wf_rate").value); } catch (e) {} };
+$("#wf_rng").onchange = () => { wfx.fillStyle = "#05080c"; wfx.fillRect(0, 0, wfc.width, wfc.height); wfScale(wfLast); try { localStorage.setItem("wf_rng", $("#wf_rng").value); } catch (e) {} };
+$("#wf_dr").oninput = () => { $("#wf_drv").textContent = $("#wf_dr").value + " dB"; try { localStorage.setItem("wf_dr", $("#wf_dr").value); } catch (e) {} };
+window.addEventListener("resize", () => wfScale(wfLast));
+window.addEventListener("resize", () => { dmScale = dmSize(); if (last) render(last); });
+drawDots([], false);
+try { const t0 = location.hash.slice(1) || localStorage.getItem("tab"); if (t0) { const b = document.querySelector(`.tab[data-p="${t0}"]`); if (b) b.click(); } } catch (e) {}
+connect();
+</script>
+</body>
+</html>

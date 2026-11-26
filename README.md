@@ -87,13 +87,16 @@ IC-7610, etc., as they share similar TX/RX characteristics.
   during links, a **CPU health** lamp (OK / BUSY / STARVED) that says what is
   late and what to do, and adaptive CPU features that drop expensive options
   level by level on a slow computer.
-- **Optional encryption between two Signums, for non-amateur use only** (**illegal on the
-  amateur bands**; built in only with `./configure --enable-encryption`, off until turned on,
-  first use needs the `NOT-AMATEUR` acknowledgement): pre-shared keys or station key pairs
-  (Noise IK/XX, AES-256-GCM, fresh keys every link for forward secrecy), checked by fingerprint
-  or by an 8-digit SAS compared by voice; zstd compression with an English dictionary before
-  encryption; never a fallback to clear text; a **Verify** mode proves the other station's key
-  without encrypting. Not compatible with any other modem's AES ([Encryption](docs/md/encryption.md)).
+- **Optional encryption between two Signums, for non-amateur use
+  only** (**illegal on the amateur bands**); built in only with
+  `./configure --enable-encryption`, off until turned on, first use
+  needs the `NOT-AMATEUR` acknowledgement): pre-shared keys or station
+  key pairs (Noise IK/XX, AES-256-GCM, fresh keys every link for
+  forward secrecy), checked by fingerprint or by an 8-digit SAS
+  compared by voice; zstd compression with an English dictionary
+  before encryption; never a fallback to clear text; a **Verify** mode
+  proves the other station's key without encrypting. Not compatible
+  with any other modem's AES ([Encryption](docs/md/encryption.md)).
 - **Try it without a radio:** `signum-loopback` runs two stations joined by
   the ALSA loopback driver for testing, evaluation, and development (or just playing around).
 - **Automatic Detection of a Signum Peer** Signum can detect when the
@@ -290,7 +293,7 @@ This code implements P1, P2, and P3. P4 was not attempted. P1 was
 fairly easy. It's been implemented by a dozen modem manufacturers in
 both hardware and software over the last 30 years. Counterintuitively,
 P3 was easy relative to P2. Getting P2 right took significantly more
-effort and P3. I've only taken a cursory look at P4, and it's not
+effort than P3. I've only taken a cursory look at P4, and it's not
 clear I'm going to attempt it at this time. P3 is fast enough, and I'd
 like to move on to other projects. I've seen nothing that indicates P4
 is not possible, I'm simply losing motivation to spend another six

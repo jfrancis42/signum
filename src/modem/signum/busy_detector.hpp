@@ -39,7 +39,7 @@ public:
 	static constexpr double kAfterLinkS = 0.625;     // busy shown on entering standby from a link
 	static constexpr double kCoherence = 0.45;
 	static constexpr double kToneShare = 0.3;
-		static constexpr double kAboveFloorDb = 8.0;
+	static constexpr double kAboveFloorDb = 8.0;
 	static constexpr double kMinRms = 4.0;           // 16-bit scale: below this nothing is detected
 
 	explicit BusyDetector(double fs = 9600.0, double f1 = 1400.0, double f2 = 1600.0) : fs_(fs)
@@ -152,7 +152,7 @@ private:
 			const double m = s[kMedBlocks / 2];
 			if (m >= kMinRms * kMinRms) { above_db_ = 10 * std::log10(m / fl); loud = above_db_ >= kAboveFloorDb; }
 		}
-		const bool heard = pb_avg_ >= kMinRms * kMinRms;
+		const bool heard = p >= kMinRms * kMinRms;   // this 10 ms, not the 0.25 s average: silence after a signal detects nothing
 		detect_ = (heard && (coh_[0] > kCoherence || coh_[1] > kCoherence || share_ > kToneShare)) || loud;
 		const double dt = 0.01;
 		step(detect_, dt, hang_lamp_, busy_lamp_);

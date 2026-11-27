@@ -128,7 +128,11 @@ IC-7610, etc., as they share similar TX/RX characteristics.
 
 ## Quick start
 
-On Debian, Ubuntu, Linux Mint or Raspberry Pi OS ([other distributions](docs/md/install.md#packages-by-distribution)):
+Ready-built packages for 64-bit x86 and ARM (Debian, Raspberry Pi OS,
+Ubuntu, Mint: a `.deb`; anything else: a tarball) are on the
+[releases page](https://github.com/jfrancis42/signum/releases)
+([details](docs/md/install.md#release-packages)). To build it yourself,
+on Debian, Ubuntu, Linux Mint or Raspberry Pi OS ([other distributions](docs/md/install.md#packages-by-distribution)):
 
 ```
 sudo apt install g++ make pkg-config libasound2-dev libcap2-bin alsa-utils python3   # Debian, Ubuntu, Mint, Raspberry Pi OS

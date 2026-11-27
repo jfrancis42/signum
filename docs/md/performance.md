@@ -89,9 +89,14 @@ works without it, but on a radio links are less reliable.
 
    (or `@audio` for everyone in the `audio` group), then **log out and in
    again** (or reboot): limits apply only to new log-ins. Signum's audio loop
-   uses priority 80 and its decoders 20, so the rtprio limit must be at
-   least 80. For a systemd service, set `LimitRTPRIO=95` and
-   `LimitMEMLOCK=infinity` in the unit instead.
+   uses priority 80 and its decoders 20, so the rtprio limit should be at
+   least 80. A lower limit still gives real-time priority, at the limit
+   (decoders one below it), and the log says
+   `[rt] real-time priority 40, not 80: the rtprio limit ...`. Without
+   `memlock unlimited` Signum does not lock memory it allocates later (a
+   small memlock limit would make that memory fail), and the log says so.
+   For a systemd service, set `LimitRTPRIO=95` and `LimitMEMLOCK=infinity`
+   in the unit instead.
 
 **Checking it:**
 

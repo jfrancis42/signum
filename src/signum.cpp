@@ -22,6 +22,7 @@
 #include <sched.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <termios.h>
 #include <unistd.h>
@@ -51,6 +52,7 @@
 #include "rig_alc.hpp"
 #include "cpu_clock.hpp"
 #include "pty_excl.hpp"
+#include "signum/par.hpp"
 #include "signum/resample5.hpp"
 #include "signum/clock_skew.hpp"
 #include "signum/autocal.hpp"
@@ -871,12 +873,25 @@ int main(int argc, char **argv)
 	}
 
 	// ================= ALSA (real time) =================
-	mlockall(MCL_CURRENT | MCL_FUTURE);
-	sched_param sp{}; sp.sched_priority = 80;
+	// Locked memory. MCL_FUTURE only when no limit can bite (CAP_IPC_LOCK, or memlock unlimited): under
+	// the usual 8 MB memlock limit every later mapping must fit in it too, so the first new thread's
+	// 8 MB stack would fail. Otherwise what is mapped now, if it fits (usually it does not: harmless).
+	{
+		rlimit ml{};
+		const bool unbounded = fmodem::par::has_cap(14) || (getrlimit(RLIMIT_MEMLOCK, &ml) == 0 && ml.rlim_cur == RLIM_INFINITY);
+		const int lr = mlockall(unbounded ? MCL_CURRENT | MCL_FUTURE : MCL_CURRENT);
+		if (!unbounded) std::printf("[rt] memory %s (no CAP_IPC_LOCK or unlimited memlock: new memory is not locked)\n", lr == 0 ? "locked as now" : "not locked");
+		else if (lr != 0) std::printf("[rt] memory not locked: %s\n", std::strerror(errno));
+	}
+	// FIFO 80, or the rtprio limit when lower (fmodem::par::audio_prio(); the decode workers stay one below)
+	sched_param sp{}; sp.sched_priority = fmodem::par::audio_prio();
 	// SIGNUM_TEST_NO_RT=1 (tests only): as if the program had no real-time permission (with SIGNUM_WORKER_PRIO=0
 	// for the decode workers too), so busy loops can starve it
-	const bool rt_ok = !std::getenv("SIGNUM_TEST_NO_RT") && sched_setscheduler(0, SCHED_FIFO, &sp) == 0;
+	const bool rt_ok = !std::getenv("SIGNUM_TEST_NO_RT") && sp.sched_priority > 0 && sched_setscheduler(0, SCHED_FIFO, &sp) == 0;
 	if (!rt_ok) std::printf("[rt] no real-time priority (run with CAP_SYS_NICE / rtprio for the best timing)\n");
+	else if (sp.sched_priority < 80)
+		std::printf("[rt] real-time priority %d, not 80: the rtprio limit (decode workers %d; raise it to 80 or more, docs/md/performance.md)\n",
+		            sp.sched_priority, fmodem::par::worker_prio());
 	core.health().set_no_realtime(!rt_ok);             // the CPU health indicator's advice (src/cpu_health.hpp)
 	core.load_probe = [](double &l, int &cores) {      // the load average, every 5 s of audio, for the same
 		double a[1];

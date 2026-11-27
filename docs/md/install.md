@@ -1,7 +1,38 @@
 # Installing Signum
 
-Signum is built from source. It is one C++17 program (`signum`) plus two
-shell scripts, a browser GUI, a terminal front panel and a man page.
+Signum is one C++17 program (`signum`) plus two shell scripts, a browser
+GUI, a terminal front panel and a man page. Install a release package, or
+build it from source (the rest of this page).
+
+## Release packages
+
+Each [release](https://github.com/jfrancis42/signum/releases) has ready-built
+files for 64-bit x86 (`amd64`) and 64-bit ARM (`arm64`, a Raspberry Pi 4 or 5
+with the 64-bit OS), built without encryption:
+
+- **Debian 12 or later, Raspberry Pi OS (64-bit), Ubuntu 22.04 or later,
+  Linux Mint 21 or later:** the `.deb`.
+
+  ```
+  sudo apt install ./signum_*_arm64.deb                # or _amd64
+  ```
+
+  It installs `/usr/bin/signum` with real-time priority already set, the
+  GUI, the man page, this documentation in `/usr/share/doc/signum`, and the
+  example systemd units in `/usr/share/signum/examples` (not enabled).
+- **Any other distribution** (Fedora, Arch, ...): the `.tar.gz`. It needs
+  ALSA's library and, for real-time priority, `setcap`.
+
+  ```
+  tar xzf signum-*-linux-amd64.tar.gz
+  sudo signum-*-linux-amd64/install.sh       # under /usr/local; --uninstall removes it
+  ```
+
+`SHA256SUMS` lists every file's checksum, and `gh attestation verify FILE
+--repo jfrancis42/signum` checks that a file was built by the project's
+release workflow. The `.debug` file holds the program's debug symbols, for a
+backtrace from a crash. A 32-bit OS, and anything older than the systems
+above, builds from source.
 
 ## Packages by distribution
 

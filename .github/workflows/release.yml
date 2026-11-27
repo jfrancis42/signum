@@ -1,0 +1,96 @@
+# Release: on a tag vX.Y.Z, build Signum for amd64 and arm64, install each package on the
+# distributions it is meant for, then attach the files to the GitHub release of that tag.
+# Built on Ubuntu 22.04 (glibc 2.35) with g++ 12, so the packages run on it and everything newer:
+# Debian 12+, Raspberry Pi OS (64-bit, bookworm)+, Ubuntu 22.04+, Mint 21+.
+name: release
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container: ubuntu:22.04
+    steps:
+      - name: Tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            g++-12 make pkg-config libasound2-dev dpkg-dev binutils ca-certificates
+      - uses: actions/checkout@v4
+      - name: The tag matches VERSION
+        run: test "v$(cat VERSION)" = "${GITHUB_REF_NAME}"
+      - name: Build and package
+        run: dist/package.sh CXX=g++-12
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signum-${{ matrix.arch }}
+          path: out/*
+          if-no-files-found: error
+
+  # each package installed and started (--version) where it is meant to work
+  install-test:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+        image: ['debian:bookworm', 'debian:trixie', 'ubuntu:22.04', 'ubuntu:24.04', 'fedora:latest']
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: signum-${{ matrix.arch }}
+      - name: Install the .deb
+        if: ${{ !startsWith(matrix.image, 'fedora') }}
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y ./signum_*.deb
+          signum --version | head -1
+          getcap /usr/bin/signum | grep -q cap_sys_nice
+          test -f /usr/share/signum/www/index.html
+      - name: Install the tarball
+        if: ${{ startsWith(matrix.image, 'fedora') }}
+        run: |
+          dnf install -y alsa-lib libcap tar gzip
+          tar xzf signum-*.tar.gz
+          ./signum-*/install.sh
+          signum --version | head -1
+          getcap /usr/local/bin/signum | grep -q cap_sys_nice
+          test -f /usr/local/share/signum/www/index.html
+          ./signum-*/install.sh --uninstall
+
+  release:
+    needs: install-test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: files
+          merge-multiple: true
+      - name: Checksums
+        run: cd files && sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'files/signum*'
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" --title "Signum ${GITHUB_REF_NAME#v}" --notes "Signum ${GITHUB_REF_NAME#v}"
+          gh release upload "$GITHUB_REF_NAME" files/* --clobber

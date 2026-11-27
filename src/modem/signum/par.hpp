@@ -13,11 +13,14 @@
 
 #include <pthread.h>
 #include <sched.h>
+#include <sys/resource.h>
 
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <functional>
 #include <mutex>
@@ -26,19 +29,52 @@
 
 namespace fmodem::par {
 
+// Whether this process holds capability `bit` (CapEff in /proc/self/status; CAP_IPC_LOCK 14,
+// CAP_SYS_NICE 23). No libcap needed.
+inline bool has_cap(int bit)
+{
+	FILE *f = std::fopen("/proc/self/status", "r");
+	if (!f) return false;
+	char line[256];
+	unsigned long long eff = 0;
+	while (std::fgets(line, sizeof line, f))
+		if (std::strncmp(line, "CapEff:", 7) == 0) { eff = std::strtoull(line + 7, nullptr, 16); break; }
+	std::fclose(f);
+	return (eff >> bit) & 1;
+}
+
+// The highest SCHED_FIFO priority this process may take: 99 with CAP_SYS_NICE, else the rtprio
+// limit (limits.d, a unit's LimitRTPRIO; 0 = none). Read once.
+inline int rt_ceiling()
+{
+	static const int c = [] {
+		if (has_cap(23)) return 99;
+		rlimit rl{};
+		if (getrlimit(RLIMIT_RTPRIO, &rl) != 0) return 0;
+		return rl.rlim_cur == RLIM_INFINITY ? 99 : int(std::min<rlim_t>(rl.rlim_cur, 99));
+	}();
+	return c;
+}
+
+// The audio loop's priority: FIFO 80, or the rtprio limit when that is lower (a limit of 40 gives
+// 40, not nothing); 0 = no real-time priority at all.
+inline int audio_prio() { return std::min(80, rt_ceiling()); }
+
 // Priority of every worker thread (this pool and the station's decode pool):
 // SCHED_FIFO SIGNUM_WORKER_PRIO (default 20), so a decode is not delayed by
 // Pat, rigctld or a browser, yet stays below the audio loop (FIFO 80) and
 // the kernel's threaded interrupts (FIFO 50, the sound card's among them).
-// 0 = SCHED_OTHER. Without permission (no CAP_SYS_NICE / rtprio limit) the
-// thread stays SCHED_OTHER, never inheriting the audio thread's FIFO 80.
+// Always below the audio loop: under a lower rtprio limit, one less than
+// audio_prio() (a limit of 15: audio 15, workers 14). 0 = SCHED_OTHER.
+// Without permission (no CAP_SYS_NICE / rtprio limit) the thread stays
+// SCHED_OTHER, never inheriting the audio thread's FIFO priority.
 // Returns the priority obtained (0 = normal).
 inline int worker_prio()
 {
 	static const int want = [] {
 		const char *e = std::getenv("SIGNUM_WORKER_PRIO");
 		const int v = e ? std::atoi(e) : 20;
-		return v < 0 ? 0 : v > 79 ? 79 : v;
+		return std::max(0, std::min({v, 79, audio_prio() - 1}));
 	}();
 	return want;
 }
